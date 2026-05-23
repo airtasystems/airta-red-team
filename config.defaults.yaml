@@ -1,0 +1,107 @@
+# =============================================================================
+# AIRTA shipped defaults (config.defaults.yaml)
+# =============================================================================
+#
+# These values apply when nothing more specific is set. Edit this file to change
+# the baseline for a fresh install or deployment image.
+#
+# Precedence (lowest → highest):
+#   1. config.defaults.yaml          ← this file (shipped baseline)
+#   2. browser-bot/browser_bot/config.py + .env   (Settings → Browser Config / Cache Control)
+#   3. browser-bot/sites/<site>/config.yaml       (optional site-wide overrides)
+#   4. browser-bot/sites/<site>/<component>/config.yaml   (per-component overrides)
+#
+# Only include keys under `settings:` that you want as defaults. Site and component
+# configs use the same keys. Booleans: true | false.
+#
+# Web UI: Settings → Component Config → Settings overrides (inherit = use global).
+
+settings:
+
+  # --- Cache control ---------------------------------------------------------
+  # Use Gemini API context caching for test generation and risk assessment.
+  # Can also be set globally via .env: GEMINI_USE_CACHE=1 or 0
+  gemini_use_cache: false
+
+  # --- Fetcher ---------------------------------------------------------------
+  # Which browser tier to use for submissions.
+  # Options: auto | pool | cluster | human
+  #   auto    — try pool → cluster → human until one works
+  #   pool    — fast shared browser pool (Tier 1)
+  #   cluster — larger parallel cluster (Tier 2)
+  #   human   — new context per request, most stealthy (Tier 3)
+  FETCH_METHOD: human
+
+  # Number of concurrent browser pages in the pool tier (1–32).
+  POOL_SIZE: 8
+
+  # Cluster tier: number of browser contexts (1–32).
+  CONTEXT_COUNT: 8
+
+  # Cluster tier: pages per context (1–16).
+  PAGES_PER_CONTEXT: 6
+
+  # --- Pool / cluster browser enhancements -----------------------------------
+  # When true, enables all POOL_CLUSTER_* flags below (ignored if set individually).
+  POOL_CLUSTER_HUMAN_LIKE: false
+
+  # Allow stylesheets (pool/cluster). Usually needed for sites that break without CSS.
+  POOL_CLUSTER_ALLOW_STYLES: false
+
+  # Apply playwright-stealth patches (pool/cluster).
+  POOL_CLUSTER_USE_STEALTH: false
+
+  # Use human-tier Chrome launch args (pool/cluster).
+  POOL_CLUSTER_USE_HUMAN_CHROME: false
+
+  # Randomise locale, viewport, and geolocation per context (pool/cluster).
+  POOL_CLUSTER_USE_HUMAN_CONTEXT: false
+
+  # --- API submission --------------------------------------------------------
+  # Max concurrent HTTP requests when component transport is api (1 = sequential).
+  API_CONCURRENCY: 8
+
+  # --- Evasion (rate limits and retries) -------------------------------------
+  # Pause between consecutive submissions, in seconds (0 = no delay).
+  # Only applies when API_CONCURRENCY is 1 (parallel mode skips inter-prompt delay).
+  EVASION_REQUEST_DELAY_S: 0.5
+
+  # Wait before retrying after a non-2xx response (e.g. 429), in seconds.
+  EVASION_RETRY_WAIT_S: 10.0
+
+  # Max retries per prompt before recording failure (0–10).
+  EVASION_MAX_RETRIES: 3
+
+  # --- Human tier (used when FETCH_METHOD is human or auto falls through) ----
+  # Simulated user country for locale, timezone, and geolocation.
+  # Options: US | UK | DE | FR | JP | CA | AU | NL | ES | IT
+  HUMAN_COUNTRY: UK
+
+  # Load stylesheets in human tier (recommended for most UIs).
+  HUMAN_ALLOW_STYLES: true
+
+  # Simulated reading pause after page load, in milliseconds.
+  HUMAN_READ_DELAY_MS: 600
+
+  # Scroll the page after load to mimic real browsing.
+  HUMAN_SCROLL_AFTER_LOAD: false
+
+  # Browser User-Agent string. Set to empty string in overrides to use Playwright default.
+  HUMAN_USER_AGENT: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36
+
+  # --- Browser launch --------------------------------------------------------
+  # Run browser without a visible window. false = headed (easier for debugging login/discovery).
+  HEADLESS: false
+
+  # Path to Chromium/Chrome binary. Use null in Python config for Playwright bundled Chromium.
+  # Linux default assumes system package at /usr/bin/chromium-browser.
+  CHROMIUM_EXECUTABLE_PATH: /usr/bin/chromium-browser
+
+  # Playwright browser channel.
+  # Options: chromium | chrome | chrome-beta | msedge
+  CHROME_CHANNEL: chromium
+
+  # Resource types to block at the network layer (speed / fingerprint reduction).
+  # Options (combine as a YAML list): image | font | media | stylesheet
+  # Example: [image, font]
+  BLOCKED_TYPES: []

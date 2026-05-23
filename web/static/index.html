@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIRTA Black Box</title>
+<link rel="icon" href="/img/AIRTA Systems.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/img/airtasystems-logo.png">
+<link rel="apple-touch-icon" href="/img/airtasystems-logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <!-- Site/component management modal -->
+  <div v-if="showModal" class="modal-backdrop" @click.self="showModal = false">
+    <div class="modal modal-context">
+      <h2 class="modal-title">Choose where to run tests</h2>
+
+      <p class="modal-hint">
+        To skip this dialog next time, add <code>TARGET</code> and <code>COMPONENT</code> to the project root <code>.env</code> file.
+      </p>
+
+      <section class="modal-section">
+        <h3 class="modal-section-title">Select target</h3>
+
+        <div class="modal-step">
+          <span class="modal-step-num" aria-hidden="true">1</span>
+          <div class="modal-field modal-field-grow">
+            <label for="modal-site-select">Site</label>
+            <select id="modal-site-select" v-model="modalSite" @change="onModalSiteChange">
+              <option value="">Choose a site…</option>
+              <option v-for="s in sites" :key="s" :value="s">{{ s }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="modal-step" :class="{ 'is-disabled': !modalSite }">
+          <span class="modal-step-num" aria-hidden="true">2</span>
+          <div class="modal-field modal-field-grow">
+            <label for="modal-component-select">Component</label>
+            <select
+              id="modal-component-select"
+              v-model="modalComponent"
+              @change="onModalComponentChange"
+              :disabled="!modalSite"
+            >
+              <option value="">{{ modalSite ? 'Choose a component…' : 'Select a site first' }}</option>
+              <option v-for="c in modalComponents" :key="c" :value="c">{{ c }}</option>
+            </select>
+            <p v-if="modalSite && modalComponent" class="modal-path">
+              sites/{{ modalSite }}/{{ modalComponent }}/
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-section modal-section-alt">
+        <h3 class="modal-section-title">Create new</h3>
+
+        <div class="modal-field">
+          <label for="modal-new-site">New site (Enter domain or URL)</label>
+          <div class="manage-inline">
+            <input id="modal-new-site" v-model="modalNewSite" placeholder="e.g. example.com or localhost:3000" @keyup.enter="modalCreateSite">
+            <button type="button" class="btn btn-primary btn-sm" @click="modalCreateSite">Create site</button>
+          </div>
+        </div>
+
+        <div class="modal-field">
+          <label for="modal-new-component">New component</label>
+          <div class="manage-inline">
+            <input
+              id="modal-new-component"
+              v-model="modalNewComponent"
+              :disabled="!modalSite"
+              :placeholder="modalSite ? 'e.g. chat or test-target' : 'Select a site above first'"
+              @keyup.enter="modalCreateComponent"
+            >
+            <button type="button" class="btn btn-primary btn-sm" @click="modalCreateComponent" :disabled="!modalSite">Create component</button>
+          </div>
+          <p v-if="!modalSite" class="modal-field-hint">Pick or create a site before adding a component.</p>
+        </div>
+      </section>
+
+      <details v-if="modalSite || modalComponent" class="modal-advanced">
+        <summary>Rename or delete</summary>
+        <div class="modal-field">
+          <label>Site</label>
+          <div class="manage-inline">
+            <input v-model="modalRenameSite" :disabled="!modalSite" placeholder="Rename selected site" @keyup.enter="modalRenameSiteAction">
+            <button type="button" class="btn btn-ghost btn-sm" @click="modalRenameSiteAction" :disabled="!modalSite || !modalRenameSite || modalRenameSite === modalSite">Rename</button>
+            <button type="button" class="btn btn-danger btn-sm" @click="modalDeleteSite" :disabled="!modalSite">Delete</button>
+          </div>
+        </div>
+        <div class="modal-field">
+          <label>Component</label>
+          <div class="manage-inline">
+            <input v-model="modalRenameComponent" :disabled="!modalComponent" placeholder="Rename selected component" @keyup.enter="modalRenameComponentAction">
+            <button type="button" class="btn btn-ghost btn-sm" @click="modalRenameComponentAction" :disabled="!modalComponent || !modalRenameComponent || modalRenameComponent === modalComponent">Rename</button>
+            <button type="button" class="btn btn-danger btn-sm" @click="modalDeleteComponent" :disabled="!modalComponent">Delete</button>
+          </div>
+        </div>
+      </details>
+
+      <div v-if="modalMsg" class="modal-status">{{ modalMsg }}</div>
+      <p v-if="modalError" class="modal-error">{{ modalError }}</p>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" @click="showModal = false">Close</button>
+        <button type="button" class="btn btn-primary" @click="confirmModal" :disabled="!modalSite || !modalComponent">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run troubleshooting modal -->
+  <div v-if="showRunTroubleshoot" class="modal-backdrop" @click.self="showRunTroubleshoot = false">
+    <div class="modal modal-wide">
+      <div class="modal-sub" style="margin-bottom:12px;">Run Tests Troubleshooting</div>
+      <div class="modal-help">
+        <p><strong>Start with a sample request.</strong> Use Send Sample Request to confirm the saved selectors, auth state, response selector, status, and timing before running a full suite.</p>
+        <p><strong>Try Human mode.</strong> In Settings -> Browser, set Fetch Method to <code>human</code> for targets that block pooled or clustered browsers.</p>
+        <p><strong>Disable headless.</strong> In Settings -> Browser, turn off Headless so you can watch the browser fill the prompt, click submit, and wait for the response.</p>
+        <p><strong>Increase timeout.</strong> In Settings -> Component, raise Response wait (ms), especially for slow model responses or streaming UIs.</p>
+        <p><strong>Check selectors.</strong> Re-run Connect Target -> Start Discovery if the prompt box, send button, or response container changed. Prefer stable selectors such as <code>#prompt-textarea</code>, <code>button[data-testid="send-button"]</code>, and <code>div[data-message-author-role="assistant"]</code>.</p>
+        <p><strong>Refresh auth.</strong> If the page opens logged out or gets redirected, run Add Login again for the site.</p>
+        <p><strong>Reduce concurrency.</strong> If you see rate limits or flaky responses, lower pool/cluster sizes or switch to Human mode before running larger suites.</p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" @click="showRunTroubleshoot = false">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="app-header">
+    <a href="/" class="brand" title="AIRTA Black Box">
+      <img src="/img/airtasystems-logo.png" alt="AIRTA Systems" class="brand-logo" width="88">
+      <div>
+        <h1>Black Box</h1>
+        <span class="brand-tag">Red Team Assessment</span>
+      </div>
+    </a>
+    <span class="context"><a href="https://airtasystems.com" target="_blank" rel="noopener">AIRTA Systems</a></span>
+    <button class="btn btn-ghost btn-sm" style="margin-left:4px;" @click="openModal" title="Manage sites and components">Manage</button>
+    <div class="header-selects">
+      <select v-model="site" @change="onSiteChange">
+        <option value="">Select site...</option>
+        <option v-for="s in sites" :key="s" :value="s">{{ s }}</option>
+      </select>
+      <select v-model="component" @change="onComponentChange" :disabled="!site" class="border-button">
+        <option value="">Select component...</option>
+        <option v-for="c in components" :key="c" :value="c">{{ c }}</option>
+      </select>
+    </div>
+  </header>
+
+  <!-- Body -->
+  <div class="app-body">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <button v-for="t in tabs" :key="t.id" :class="{active: tab === t.id}" @click="tab = t.id">{{ t.label }}</button>
+    </nav>
+
+    <!-- Main -->
+    <div class="main">
+      <div class="view">
+
+        <!-- Generate -->
+        <template v-if="tab === 'generate'">
+          <h2>Generate Tests</h2>
+          <div v-if="!hintDismissed['generate']" class="hint-banner">
+            <div><strong>{{ HINTS.generate.title }}</strong><p>{{ HINTS.generate.text }}</p></div>
+            <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('generate')">Got it</button>
+          </div>
+          <div class="form-row">
+            <label>Playbook</label>
+            <select v-model="gen.playbook">
+              <option v-for="f in allPlaybooks" :key="f" :value="f">{{ pretty(f) }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Strategy</label>
+            <select v-model="gen.strategy">
+              <option value="__all__">All strategies</option>
+              <option v-for="s in allStrategies" :key="s" :value="s">{{ pretty(s) }}</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" @click="startGenerate" :disabled="!site || !component || !gen.strategy || !gen.playbook">
+            {{ gen.strategy === '__all__' ? 'Generate All Strategies' : 'Generate' }}
+          </button>
+          <div class="console" v-if="activeOutput('generate').length" ref="genConsole">
+            <div v-for="(line, i) in activeOutput('generate')" :key="i" :class="lineClass(line)">{{ line }}</div>
+          </div>
+        </template>
+
+        <!-- Payloads -->
+        <template v-if="tab === 'payloads'">
+          <h2>Payloads</h2>
+          <div v-if="!hintDismissed['payloads']" class="hint-banner">
+            <div><strong>{{ HINTS.payloads.title }}</strong><p>{{ HINTS.payloads.text }}</p></div>
+            <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('payloads')">Got it</button>
+          </div>
+          <div class="form-row">
+            <label>Asset type</label>
+            <select v-model="payloadAssetType" style="max-width:280px;">
+              <option v-for="t in payloadTypes" :key="t.asset_type" :value="t.asset_type">{{ t.label }}</option>
+            </select>
+            <button class="btn btn-ghost btn-sm" @click="loadPayloadFiles">Refresh library</button>
+          </div>
+          <div class="cfg-section" v-if="payloadTypes.length">
+            <div class="cfg-section-title">Options</div>
+            <div v-for="f in (payloadTypes.find(t => t.asset_type === payloadAssetType) || {}).fields || []" :key="f.name" class="form-row" style="align-items:flex-start;">
+              <label style="padding-top:6px;">{{ f.label }}</label>
+              <textarea v-if="f.type === 'textarea'" v-model="payloadForm[f.name]" rows="3" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;"></textarea>
+              <label v-else-if="f.type === 'bool'" class="checkbox-row" style="margin:0;">
+                <input type="checkbox" v-model="payloadForm[f.name]">
+                <span>{{ payloadForm[f.name] ? 'Yes' : 'No' }}</span>
+              </label>
+              <input v-else-if="f.type === 'number'" type="number" v-model.number="payloadForm[f.name]" style="max-width:200px;">
+              <input v-else v-model="payloadForm[f.name]" style="flex:1;max-width:none;">
+            </div>
+            <button class="btn btn-primary" @click="generatePayloadAsset" :disabled="payloadGenBusy">
+              {{ payloadGenBusy ? 'Generating…' : 'Generate' }}
+            </button>
+            <p v-if="payloadGenError" style="color:var(--red);font-size:13px;">{{ payloadGenError }}</p>
+            <div v-if="payloadGenResult" style="margin-top:12px;font-size:13px;">
+              <div><strong>Saved:</strong> <code>{{ payloadGenResult.relative_path || payloadGenResult.path }}</code></div>
+              <a v-if="payloadGenResult.relative_path" :href="payloadDownloadUrl(payloadGenResult.relative_path)" target="_blank" rel="noopener">Download</a>
+              <div v-if="payloadGenResult.warning" style="color:var(--yellow);margin-top:4px;">{{ payloadGenResult.warning }}</div>
+            </div>
+          </div>
+          <div class="cfg-section" style="margin-top:20px;">
+            <div class="cfg-section-title">Artifact library</div>
+            <table v-if="payloadFiles.length" class="results-table">
+              <thead><tr><th>File</th><th>Size</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="f in payloadFiles" :key="f.relative_path">
+                  <td><code>{{ f.relative_path }}</code></td>
+                  <td>{{ f.size }} B</td>
+                  <td><a :href="payloadDownloadUrl(f.relative_path)" target="_blank" rel="noopener">Download</a></td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-else class="empty">No generated artifacts yet.</p>
+          </div>
+        </template>
+
+        <!-- Discovery -->
+        <template v-if="tab === 'discover'">
+          <h2>Connect Target</h2>
+          <div v-if="!hintDismissed['discover']" class="hint-banner">
+            <div><strong>{{ HINTS.discover.title }}</strong><p>{{ HINTS.discover.text }}</p></div>
+            <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('discover')">Got it</button>
+          </div>
+
+          <div class="setup-steps">
+            <!-- Step 1: Authentication -->
+            <div class="setup-step">
+              <div class="setup-step-header">
+                <span class="step-num" :class="authConfigured ? 'done' : ''">{{ authConfigured ? '✓' : '1' }}</span>
+                Target access
+                <span class="step-status" :class="authConfigured ? 'ok' : 'warn'">
+                  {{ authConfigured ? (authMode === 'none' ? 'No login required' : 'Auth configured') : 'Not configured' }}
+                </span>
+              </div>
+              <div class="setup-step-body">
+                <template v-if="authConfigured">
+                  <p v-if="authMode === 'none'">
+                    This target is set up for <strong>public access</strong> - no login session is stored.
+                    Browser tests will run without saved cookies.
+                  </p>
+                  <p v-else>
+                    Login session saved for this site. Re-run login below if tokens expire or you are redirected to sign-in.
+                  </p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="resetAuthSetup">Change access type</button>
+                </template>
+
+                <template v-else-if="authLoginChoice === null">
+                  <p>Does this target require you to log in before you can use the LLM?</p>
+                  <div class="auth-choice-btns">
+                    <button type="button" class="btn btn-primary" @click="chooseAuthRequired">Yes - login required</button>
+                    <button type="button" class="btn btn-ghost" @click="chooseAuthNotRequired" :disabled="!site || authPublicSaving">
+                      {{ authPublicSaving ? 'Saving…' : 'No - public access' }}
+                    </button>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <p>Open a browser, log in to the target app, then press Enter to save the auth state.</p>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input v-model="loginUrl" placeholder="https://example.com/login"
+                      style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;color:var(--text);font-size:13px;">
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-primary" @click="startLogin" :disabled="!site || !loginUrl || loginRunning">Start Login</button>
+                    <button type="button" class="btn btn-ghost" @click="sendLoginEnter" :disabled="!loginJobId || !loginRunning">Press Enter (done)</button>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="authLoginChoice = null">Back</button>
+                  </div>
+                  <div class="console" v-if="activeOutput('login').length" ref="loginConsole">
+                    <div v-for="(line, i) in activeOutput('login')" :key="i" :class="lineClass(line)">{{ line }}</div>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <!-- Step 2: Company Discovery -->
+            <div class="setup-step">
+              <div class="setup-step-header">
+                <span class="step-num" :class="companyDiscoverDone ? 'done' : ''">{{ companyDiscoverDone ? '✓' : '2' }}</span>
+                Company Context
+                <span v-if="companyDiscoverDone" class="step-status ok">company.json saved</span>
+              </div>
+              <div class="setup-step-body">
+                <p>A browser will open. Navigate to a page that best describes the company - e.g. <code>/about</code>, home page, or wiki. Click <strong>Capture Page</strong> in the browser panel, or use the button below when the page is fully loaded. The page content is extracted and Gemini generates <code>company.json</code> grounding test prompts in the real company context.</p>
+                <div style="display:flex;gap:8px;">
+                  <button class="btn btn-primary" @click="startCompanyDiscover" :disabled="!site || companyDiscoverRunning">Start Company Discovery</button>
+                  <button class="btn btn-ghost" @click="sendCompanyDiscoverEnter" :disabled="!companyDiscoverJobId || !companyDiscoverRunning">Capture Current Page</button>
+                </div>
+                <div class="console" v-if="activeOutput('company_discovery').length" ref="companyDiscoverConsole">
+                  <div v-for="(line, i) in activeOutput('company_discovery')" :key="i" :class="lineClass(line)">{{ line }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Step 3: Component Discovery -->
+            <div class="setup-step">
+              <div class="setup-step-header">
+                <span class="step-num">3</span>
+                Configure Component
+              </div>
+              <div class="setup-step-body">
+                <p>Connect AIRTA to the LLM component using <strong>browser automation</strong> (record UI selectors) or a direct <strong>API endpoint</strong> when the app exposes one (e.g. test target <code>POST /api/chat</code>).</p>
+
+                <div class="form-row" style="margin-bottom:12px;">
+                  <label>Connection type</label>
+                  <select v-model="discoverTransport" style="max-width:220px;">
+                    <option value="browser">Browser UI</option>
+                    <option value="api">API endpoint</option>
+                  </select>
+                </div>
+
+                <template v-if="discoverTransport === 'browser'">
+                  <p>Opens a browser with your auth loaded and records UI selectors for input, submit, and response elements. Discovery scans for file upload support and writes multimodal <code>inputs</code> (file + <code>path_from: payload</code>) into <code>config.yaml</code> when found. When you confirm the chat page, AIRTA also generates <code>component.json</code>. Use <strong>Start Discovery</strong> for the in-page guide, or <strong>Troubleshoot</strong> for automated selector detection.</p>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-primary" @click="startManualDiscover" :disabled="!site || !component || manualDiscoverRunning">Start Discovery</button>
+                    <button class="btn btn-ghost" @click="startDiscover" :disabled="!site || !component || discoverRunning">Troubleshoot</button>
+                    <button class="btn btn-ghost" @click="sendEnter" :disabled="!discoverJobId">Press Enter</button>
+                  </div>
+                  <div class="console" v-if="activeOutput('discover').length" ref="discoverConsole">
+                    <div v-for="(line, i) in activeOutput('discover')" :key="i" :class="lineClass(line)">{{ line }}</div>
+                  </div>
+                  <div class="console" v-if="activeOutput('manual_discover').length">
+                    <div v-for="(line, i) in activeOutput('manual_discover')" :key="i" :class="lineClass(line)">{{ line }}</div>
+                  </div>
+                </template>
+
+                <template v-else>
+                  <p>Send a probe request to the API and save the request format to <code>config.yaml</code>. Use <code>{{ PROMPT_TEMPLATE_HINT }}</code> in the JSON body where the test prompt belongs.</p>
+                  <div class="form-row">
+                    <label>API transport</label>
+                    <select v-model="apiDiscover.transport" style="max-width:220px;">
+                      <option value="api">JSON chat API</option>
+                      <option value="api_document">Upload + chat (document_id)</option>
+                      <option value="api_multipart">Multipart (file + prompt)</option>
+                    </select>
+                  </div>
+                  <div v-if="apiDiscover.transport === 'api_document'" class="form-row">
+                    <label>Upload URL</label>
+                    <input v-model="apiDiscover.uploadUrl" placeholder="http://127.0.0.1:5000/api/documents/upload" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                  </div>
+                  <div class="form-row">
+                    <label>{{ apiDiscover.transport === 'api_document' ? 'Chat API URL' : 'API URL' }}</label>
+                    <input v-model="apiDiscover.url" placeholder="http://localhost:3000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Method</label>
+                    <select v-model="apiDiscover.method" style="max-width:160px;">
+                      <option value="POST">POST</option>
+                      <option value="GET">GET</option>
+                      <option value="PUT">PUT</option>
+                      <option value="PATCH">PATCH</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label>Response path</label>
+                    <input v-model="apiDiscover.responsePath" placeholder="response" style="max-width:200px;font-family:var(--mono);font-size:12px;">
+                    <span class="cfg-note" style="margin:0;">JSON field for assistant text</span>
+                  </div>
+                  <div class="form-row" style="align-items:flex-start;">
+                    <label style="padding-top:6px;">Request body</label>
+                    <textarea v-model="apiDiscover.bodyJson" rows="4" :placeholder="PROMPT_BODY_PLACEHOLDER" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;"></textarea>
+                  </div>
+                  <div class="form-row" style="align-items:flex-start;">
+                    <label style="padding-top:6px;">Headers (optional)</label>
+                    <textarea v-model="apiDiscover.headersJson" rows="2" placeholder='{"Authorization": "Bearer ..."}' style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;"></textarea>
+                  </div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-primary" @click="startApiDiscover" :disabled="!site || !component || !apiDiscover.url || apiDiscoverRunning">Connect via API</button>
+                  </div>
+                  <div class="console" v-if="activeOutput('api_discover').length">
+                    <div v-for="(line, i) in activeOutput('api_discover')" :key="i" :class="lineClass(line)">{{ line }}</div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Run Tests -->
+        <template v-if="tab === 'run'">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <h2 style="margin:0;">Run Tests</h2>
+            <button class="btn btn-ghost btn-sm" @click="refreshRunTests" title="Reload available tests">&#8635; Refresh</button>
+          </div>
+          <div v-if="!hintDismissed['run']" class="hint-banner">
+            <div><strong>{{ HINTS.run.title }}</strong><p>{{ HINTS.run.text }}</p></div>
+            <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('run')">Got it</button>
+          </div>
+          <div class="form-row">
+            <label>Strategy</label>
+            <select v-model="run.strategy" @change="loadRunPlaybooks">
+              <option value="">Select...</option>
+              <option value="__all__">All strategies</option>
+              <option v-for="s in runStrategies" :key="s.slug" :value="s.slug">{{ s.label }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Playbook</label>
+            <select v-model="run.playbook" @change="() => {}" :disabled="!runAllPlaybooks.length && !runPlaybooks.length">
+              <option value="">Select...</option>
+              <template v-if="run.strategy === '__all__'">
+                <option v-for="f in runAllPlaybooks" :key="f.slug" :value="f.slug">{{ f.label }}</option>
+              </template>
+              <template v-else>
+                <option v-for="f in runPlaybooks" :key="f.slug" :value="f.path">{{ f.label }}</option>
+              </template>
+            </select>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="assess" v-model="run.assess">
+            <label for="assess">Run security assessment after</label>
+          </div>
+          <div v-if="runUploadWarning" class="hint-banner" style="margin-top:12px;border-color:var(--yellow);">
+            <p>{{ runUploadWarning }}</p>
+          </div>
+          <div v-if="runArtifactStatus.length" class="cfg-section" style="margin-top:12px;">
+            <div class="cfg-section-title">Payload artifacts (multimodal)</div>
+            <table class="results-table">
+              <thead><tr><th>Prompt</th><th>Status</th><th>Path / generator</th></tr></thead>
+              <tbody>
+                <tr v-for="row in runArtifactStatus" :key="row.id">
+                  <td><code>{{ row.id }}</code></td>
+                  <td>{{ row.status }}</td>
+                  <td><code>{{ row.path || row.generator || '—' }}</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn btn-primary" @click="startRunTests" :disabled="!run.playbook">
+              {{ run.strategy === '__all__' ? 'Run All Strategies' : 'Run' }}
+            </button>
+            
+            <button class="btn btn-ghost" @click="startSampleRequest" :disabled="!site || !component || sampleRequestRunning">
+              {{ sampleRequestRunning ? 'Sending Sample…' : 'Send Sample Request' }}
+            </button>
+            <button class="btn btn-ghost" @click="showRunTroubleshoot = true">
+              Troubleshoot
+            </button>
+          </div>
+          <div
+            v-if="runProgress && activeJobs.run_tests"
+            class="run-progress-wrap"
+          >
+            <div class="run-progress-meta">
+              <span>{{ runProgressBarLabel }}</span>
+              <span class="run-progress-eta">{{ runProgressEtaText }}</span>
+            </div>
+            <div class="run-progress-track">
+              <div class="run-progress-fill" :style="{ width: (runProgress.pct || 0) + '%' }"></div>
+            </div>
+          </div>
+          <div class="console" v-if="activeOutput('run_tests').length" ref="runConsole">
+            <div v-for="(line, i) in activeOutput('run_tests')" :key="i" :class="lineClass(line)">{{ line }}</div>
+          </div>
+          <div class="console" v-if="activeOutput('sample_request').length">
+            <div v-for="(line, i) in activeOutput('sample_request')" :key="i" :class="lineClass(line)">{{ line }}</div>
+          </div>
+
+          <div v-if="runResultsLoading" style="color:var(--text-dim);font-size:13px;margin-top:16px;">Loading results…</div>
+          <template v-else-if="runResults.length">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:20px;margin-bottom:8px;">
+              <span style="font-size:13px;font-weight:600;">Results <span style="color:var(--text-dim);font-weight:400;">({{ runResults.length }})</span></span>
+            </div>
+            <table class="results-table">
+              <thead>
+                <tr>
+                  <th style="width:60px;">#</th>
+                  <th style="width:40%;">Prompt</th>
+                  <th>Response</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(r, i) in runResults" :key="i" @click="toggleRunRow(i)" style="cursor:pointer;">
+                  <td style="color:var(--text-dim);">{{ r.label }}</td>
+                  <td class="cell-prompt">{{ r.input }}</td>
+                  <td class="cell-response">
+                    <template v-if="expandedRunRows[i] || !r.response || r.response.length <= 200">
+                      {{ r.response || '-' }}
+                    </template>
+                    <template v-else>
+                      {{ r.response.slice(0, 200) }}<span style="color:var(--accent);">… ▼</span>
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+        </template>
+
+        <!-- Test Management -->
+        <template v-if="tab === 'tests'">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+            <h2 style="margin:0;">Test Management</h2>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span v-if="tmSaveMsg" style="font-size:12px;color:var(--text-dim);">{{ tmSaveMsg }}</span>
+              <button v-if="tmFile" class="btn btn-primary btn-sm" @click="tmSave" :disabled="!tmDirty || tmSaving">
+                {{ tmSaving ? 'Saving…' : 'Save changes' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="!hintDismissed['tests']" class="hint-banner">
+            <div><strong>{{ HINTS.tests.title }}</strong><p>{{ HINTS.tests.text }}</p></div>
+            <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('tests')">Got it</button>
+          </div>
+
+          <!-- Import zero-shot prompts -->
+          <div class="tm-import">
+            <div>
+              <strong>Import zero-shot prompts</strong>
+              <p>Upload a JSON array of prompt strings/objects, an object with <code>prompts</code>, or a full generated test suite.</p>
+            </div>
+            <div class="tm-import-controls">
+              <input type="file" accept="application/json,.json" @change="tmImportFileChanged">
+              <input v-model="tmImportName" placeholder="Save as filename">
+              <button class="btn btn-primary btn-sm" @click="tmImportZeroShot" :disabled="!tmImportFile || tmImporting">
+                {{ tmImporting ? 'Importing...' : 'Import tests' }}
+              </button>
+            </div>
+            <div v-if="tmImportMsg" class="tm-import-msg">{{ tmImportMsg }}</div>
+          </div>
+
+          <!-- File picker -->
+          <div class="tm-picker">
+            <div class="form-row">
+              <label>Strategy</label>
+              <select v-model="tmStrategy" @change="tmLoadPlaybooks">
+                <option value="">Select…</option>
+                <option v-for="s in tmStrategies" :key="s.slug" :value="s.slug">{{ s.label }}</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Test file</label>
+              <select v-model="tmPlaybook" @change="tmLoadFile" :disabled="!tmStrategy">
+                <option value="">Select…</option>
+                <option v-for="f in tmPlaybooks" :key="f.slug" :value="f.path">{{ f.label }}</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- No file selected -->
+          <div v-if="!tmFile && tmStrategy && !tmPlaybooks.length" style="color:var(--text-dim);font-size:13px;margin-top:16px;">
+            No test files found for this strategy.
+          </div>
+
+          <!-- File editor -->
+          <div v-if="tmFile" class="tm-editor">
+            <!-- File meta -->
+            <div class="tm-meta">
+              <div class="form-row" style="margin-bottom:8px;">
+                <label>Title</label>
+                <input v-model="tmFile.playbook" @input="tmMarkDirty" placeholder="Playbook name">
+              </div>
+              <div class="form-row" style="margin:0;">
+                <label>Description</label>
+                <input v-model="tmFile.description" @input="tmMarkDirty" placeholder="File description">
+              </div>
+            </div>
+
+            <!-- Category groups -->
+            <div v-for="(category, mi) in tmFile.categories" :key="mi" class="tm-category">
+              <div class="tm-category-header">
+                <div>
+                  <input class="tm-category-title" v-model="category.category" @input="tmMarkDirty" placeholder="Category name">
+                  <span v-if="category.focus" class="badge badge-neutral" style="margin-left:8px;">{{ category.focus }}</span>
+                </div>
+                <span style="font-size:12px;color:var(--text-dim);">{{ category.prompts.length }} prompt(s)</span>
+              </div>
+
+              <!-- Prompts table -->
+              <table class="tm-table">
+                <thead>
+                  <tr>
+                    <th style="width:180px;">ID</th>
+                    <th>Prompt</th>
+                    <th style="width:36px;"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-for="(p, pi) in category.prompts" :key="p.id || pi">
+                    <!-- View row -->
+                    <tr v-if="tmEditingId !== (mi + ':' + pi)" class="tm-row" @click="tmEditingId = mi + ':' + pi">
+                      <td class="tm-id">{{ p.id }}</td>
+                      <td class="tm-prompt-text">{{ p.prompt }}</td>
+                      <td><button class="btn-icon tm-del" @click.stop="tmDeletePrompt(mi, pi)" title="Delete">✕</button></td>
+                    </tr>
+                    <!-- Edit row (expanded) -->
+                    <tr v-else class="tm-row tm-editing">
+                      <td colspan="3" class="tm-edit-cell">
+                        <div class="tm-edit-grid">
+                          <div class="form-row" style="margin:0;">
+                            <label>ID</label>
+                            <input v-model="p.id" @input="tmMarkDirty" placeholder="unique-id">
+                          </div>
+                          <div class="form-row" style="margin:0;">
+                            <label>Description</label>
+                            <input v-model="p.description" @input="tmMarkDirty" placeholder="What this probes">
+                          </div>
+                          <div class="form-row" style="margin:0;grid-column:1/-1;">
+                            <label>Prompt</label>
+                            <textarea v-model="p.prompt" @input="tmMarkDirty" rows="3" placeholder="Benign user message after upload"></textarea>
+                          </div>
+                          <div class="form-row" style="margin:0;">
+                            <label>Vector type</label>
+                            <input v-model="p.vector_type" @input="tmMarkDirty" placeholder="text_direct or document_pdf_hidden">
+                          </div>
+                          <div class="form-row" style="margin:0;">
+                            <label>Payload generator</label>
+                            <select v-model="p.payload.generator" @change="tmMarkDirty" v-if="p.payload">
+                              <option v-for="g in PAYLOAD_GENERATORS" :key="g" :value="g">{{ g }}</option>
+                            </select>
+                            <button v-else class="btn btn-ghost btn-sm" @click="p.payload = { generator: 'text', args: {} }; tmMarkDirty()">+ Add payload</button>
+                          </div>
+                          <div v-if="p.payload" class="form-row" style="margin:0;grid-column:1/-1;">
+                            <label>Payload args (JSON)</label>
+                            <textarea :value="JSON.stringify(p.payload.args || {}, null, 2)" @input="e => { try { p.payload.args = JSON.parse(e.target.value); tmMarkDirty(); } catch(_) {} }" rows="4"></textarea>
+                          </div>
+                          <div v-if="p.payload" style="grid-column:1/-1;display:flex;gap:8px;align-items:center;">
+                            <button class="btn btn-ghost btn-sm" @click="tmGeneratePayloadForPrompt(p)" :disabled="tmPayloadGenBusy">Generate payload file</button>
+                            <span v-if="tmPayloadGenMsg" style="font-size:12px;color:var(--text-dim);">{{ tmPayloadGenMsg }}</span>
+                          </div>
+                          <div style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px;">
+                            <button class="btn btn-ghost btn-sm" @click="tmEditingId = null">Done</button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+
+              <!-- Add prompt form / button -->
+              <div v-if="tmAddingCategory === mi" class="tm-add-form">
+                <div class="tm-edit-grid">
+                  <div class="form-row" style="margin:0;">
+                    <label>ID</label>
+                    <input v-model="tmNewPrompt.id" placeholder="unique-slug">
+                  </div>
+                  <div class="form-row" style="margin:0;">
+                    <label>Description</label>
+                    <input v-model="tmNewPrompt.description" placeholder="What this probes">
+                  </div>
+                  <div class="form-row" style="margin:0;grid-column:1/-1;">
+                    <label>Prompt</label>
+                    <textarea v-model="tmNewPrompt.prompt" rows="3" placeholder="Benign user message after upload"></textarea>
+                  </div>
+                  <div class="form-row" style="margin:0;">
+                    <label>Vector type</label>
+                    <input v-model="tmNewPrompt.vector_type" placeholder="document_pdf_hidden">
+                  </div>
+                  <div class="form-row" style="margin:0;">
+                    <label>Payload generator</label>
+                    <select v-model="tmNewPrompt.payload_generator">
+                      <option value="none">none (text-only)</option>
+                      <option v-for="g in PAYLOAD_GENERATORS" :key="g" :value="g">{{ g }}</option>
+                    </select>
+                  </div>
+                  <div v-if="tmNewPrompt.payload_generator !== 'none'" class="form-row" style="margin:0;grid-column:1/-1;">
+                    <label>Payload args (JSON)</label>
+                    <textarea v-model="tmNewPrompt.payload_args_json" rows="3"></textarea>
+                  </div>
+                  <div style="grid-column:1/-1;display:flex;gap:8px;">
+                    <button class="btn btn-primary btn-sm" @click="tmConfirmAdd(mi)" :disabled="!tmNewPrompt.id || !tmNewPrompt.prompt">Add</button>
+                    <button class="btn btn-ghost btn-sm" @click="tmAddingCategory = ''">Cancel</button>
+                  </div>
+                </div>
+              </div>
+              <button v-else class="btn btn-ghost btn-sm tm-add-btn" @click="tmStartAdd(mi)">+ Add prompt</button>
+            </div>
+          </div>
+        </template>
+
+        <!-- Security Assessment -->
+        <template v-if="tab === 'risk'">
+          <h2>Security Assessment</h2>
+          <div v-if="!hintDismissed['risk']" class="hint-banner">
+            <div><strong>{{ HINTS.risk.title }}</strong><p>{{ HINTS.risk.text }}</p></div>
+            <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('risk')">Got it</button>
+          </div>
+          <div class="form-row">
+            <label>Compliance Log</label>
+            <select v-model="risk.log">
+              <option value="">Select...</option>
+              <option v-for="l in logs.attacks" :key="l.path" :value="l.path">{{ l.name }}</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" @click="startSecurityAssess" :disabled="!risk.log">Assess</button>
+          <div
+            v-if="runProgress && riskTabProgressBarVisible"
+            class="run-progress-wrap"
+          >
+            <div class="run-progress-meta">
+              <span>{{ runProgressBarLabel }}</span>
+              <span class="run-progress-eta">{{ runProgressEtaText }}</span>
+            </div>
+            <div class="run-progress-track">
+              <div class="run-progress-fill" :style="{ width: (runProgress.pct || 0) + '%' }"></div>
+            </div>
+          </div>
+          <div class="console" v-if="activeOutput('security_assess').length" ref="riskConsole">
+            <div v-for="(line, i) in activeOutput('security_assess')" :key="i" :class="lineClass(line)">{{ line }}</div>
+          </div>
+        </template>
+
+        <!-- Export -->
+        <template v-if="tab === 'export'">
+          <h2>Export to AIRTA Systems</h2>
+          <div v-if="!hintDismissed['export']" class="hint-banner">
+            <div><strong>{{ HINTS.export.title }}</strong><p>{{ HINTS.export.text }}</p></div>
+            <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('export')">Got it</button>
+          </div>
+
+          <div class="export-grid">
+            <!-- Left: report + credentials -->
+            <div class="export-left">
+              <div class="cfg-section">
+                <div class="cfg-section-title">Report</div>
+                <div class="form-row">
+                  <label>Pipeline Report</label>
+                  <select v-model="exp.report">
+                    <option value="">Select...</option>
+                    <option v-for="r in logs.reports" :key="r.path" :value="r.path">{{ r.name }}</option>
+                  </select>
+                </div>
+                <div v-if="expPreview" class="export-preview">
+                  <span class="badge badge-neutral">{{ expPreview.count }} finding(s)</span>
+                  <span v-if="expPreview.playbook" class="badge badge-info">{{ expPreview.playbook }}</span>
+                  <span v-if="expPreview.timestamp" class="badge badge-neutral" style="font-family:monospace;font-size:11px;">{{ expPreview.timestamp }}</span>
+                </div>
+              </div>
+
+              <div class="cfg-section">
+                <div class="cfg-section-title">AIRTA Systems Credentials</div>
+                <p class="cfg-note">Credentials are saved to <code>.env</code> on the server - the API key is never sent to your browser.</p>
+
+                <!-- Saved state summary -->
+                <div v-if="expCreds.host || expCreds.has_api_key" class="creds-status">
+                  <span class="creds-row"><span class="creds-label">Host</span><span>{{ expCreds.host || '-' }}</span></span>
+                  <span class="creds-row"><span class="creds-label">API Key</span><span>{{ expCreds.has_api_key ? '●●●●●●●●●●●●' : '-' }}</span></span>
+                  <button class="btn btn-ghost btn-sm" style="margin-top:8px;" @click="clearExpCreds">Remove credentials</button>
+                </div>
+
+                <!-- Edit form -->
+                <details :open="!expCreds.has_api_key" style="margin-top:10px;">
+                  <summary style="cursor:pointer;font-size:13px;color:var(--text-dim);user-select:none;">
+                    {{ expCreds.has_api_key ? 'Update credentials' : 'Enter credentials' }}
+                  </summary>
+                  <div style="margin-top:10px;">
+                    <div class="form-row"><label>Host</label><input v-model="expCredsEdit.host" placeholder="app.airtasystems.com"></div>
+                    <div class="form-row"><label>API Key</label><input v-model="expCredsEdit.api_key" type="password" placeholder="AIRTASYSTEMS_API_KEY (leave blank to keep existing)"></div>
+                    <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+                      <button class="btn btn-secondary btn-sm" @click="saveExpCreds" :disabled="expCredsSaving">
+                        {{ expCredsSaving ? 'Saving…' : 'Save to .env' }}
+                      </button>
+                      <span v-if="expCredsMsg" style="font-size:12px;color:var(--text-dim);">{{ expCredsMsg }}</span>
+                    </div>
+                  </div>
+                </details>
+              </div>
+
+              <div class="cfg-section">
+                <div class="cfg-section-title">Program</div>
+                <div class="form-row">
+                  <label>Program ID</label>
+                  <input v-model="exp.program_id" placeholder="MongoDB ObjectId">
+                </div>
+                <p class="cfg-note">Each export targets one program. Change this between submissions to send results to different programs.</p>
+              </div>
+
+              <button class="btn btn-primary" @click="startExport" :disabled="!exp.report || !expCreds.has_api_key || !expCreds.host || !exp.program_id">
+                Export to AIRTA Systems
+              </button>
+            </div>
+
+            <!-- Right: result summary -->
+            <div class="export-right">
+              <div v-if="expResult" class="export-result">
+                <div class="cfg-section-title">Last Export Result</div>
+                <div class="export-result-badges">
+                  <div class="export-stat" :class="expResult.status === 'done' ? 'stat-ok' : 'stat-err'">
+                    <span class="stat-label">Status</span>
+                    <span class="stat-value">{{ expResult.status }}</span>
+                  </div>
+                  <div class="export-stat">
+                    <span class="stat-label">Total</span>
+                    <span class="stat-value">{{ expResult.total }}</span>
+                  </div>
+                  <div class="export-stat stat-ok">
+                    <span class="stat-label">Created</span>
+                    <span class="stat-value">{{ expResult.created }}</span>
+                  </div>
+                  <div class="export-stat" :class="expResult.failed > 0 ? 'stat-err' : ''">
+                    <span class="stat-label">Failed</span>
+                    <span class="stat-value">{{ expResult.failed }}</span>
+                  </div>
+                </div>
+                <div v-if="expResult.errors && expResult.errors.length" class="export-errors">
+                  <div class="cfg-section-title" style="margin-top:12px;">Errors</div>
+                  <div v-for="(e, i) in expResult.errors" :key="i" class="export-error-line">{{ e }}</div>
+                </div>
+              </div>
+              <div v-else class="export-result-placeholder">
+                <p>Export results will appear here after a successful submission.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="console" v-if="activeOutput('export').length" ref="exportConsole" style="margin-top:16px;">
+            <div v-for="(line, i) in activeOutput('export')" :key="i" :class="lineClass(line)">{{ line }}</div>
+          </div>
+        </template>
+
+        <!-- Clear Cache -->
+        <!-- Settings (unified: Component Config, Rubrics, Browser Config, Cache) -->
+        <template v-if="tab === 'settings'">
+          <h2>Settings</h2>
+
+          <!-- Inner sub-tab nav -->
+          <div class="settings-tabs">
+            <button :class="['settings-tab', settingsTab === 'component' && 'active']" @click="settingsTab = 'component'">Component Config</button>
+            <button :class="['settings-tab', settingsTab === 'deployment'   && 'active']" @click="settingsTab = 'deployment'">Deployment</button>
+            <button :class="['settings-tab', settingsTab === 'browser'   && 'active']" @click="settingsTab = 'browser'">Browser Config</button>
+            <button :class="['settings-tab', settingsTab === 'cache'     && 'active']" @click="settingsTab = 'cache'">Cache Control</button>
+          </div>
+
+          <!-- Component Config -->
+          <template v-if="settingsTab === 'component'">
+            <div class="settings-section-head">
+              <span v-if="site && component" style="font-size:12px;color:var(--text-dim);">browser-bot/sites/{{ site }}/{{ component }}/config.yaml</span>
+            </div>
+            <div v-if="!site || !component" class="empty">Select a site and component first.</div>
+            <template v-else>
+              <div v-if="!hintDismissed['component']" class="hint-banner">
+                <div><strong>{{ HINTS.component.title }}</strong><p>{{ HINTS.component.text }}</p></div>
+                <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('component')">Got it</button>
+              </div>
+
+              <div v-if="compCfgEmpty" class="discovery-prompt">
+                <div>
+                  <strong>No submission config found.</strong>
+                  Run Connect Target to configure browser UI selectors or an API endpoint.
+                </div>
+                <button class="btn btn-primary" @click="tab = 'discover'">
+                  ▶ Connect Target
+                </button>
+              </div>
+
+              <div class="cfg-section">
+                <div class="cfg-section-title">Auth</div>
+                <div class="form-row">
+                  <label>Login URL</label>
+                  <input v-model="compCfg.login_url" placeholder="https://example.com/login or http://localhost:3000" style="flex:1;max-width:none;">
+                </div>
+              </div>
+
+              <div class="cfg-section">
+                <div class="cfg-section-title">Submission</div>
+                <div class="form-row">
+                  <label>Transport</label>
+                  <select v-model="compCfg.submission.transport" style="max-width:220px;">
+                    <option value="ui">Browser UI</option>
+                    <option value="api">API endpoint</option>
+                    <option value="api_document">API upload + chat</option>
+                    <option value="api_multipart">API multipart (file + prompt)</option>
+                  </select>
+                </div>
+
+                <template v-if="compCfg.submission.transport === 'api_document'">
+                  <div class="form-row">
+                    <label>Upload URL</label>
+                    <input v-model="compCfg.submission.upload_url" placeholder="http://localhost:5000/api/documents/upload" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Upload file field</label>
+                    <input v-model="compCfg.submission.upload_file_field" placeholder="file" style="max-width:200px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Upload response path</label>
+                    <input v-model="compCfg.submission.upload_response_path" placeholder="document_id" style="max-width:200px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Chat API URL</label>
+                    <input v-model="compCfg.submission.api_url" placeholder="http://localhost:5000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Response path</label>
+                    <input v-model="compCfg.submission.api_response_path" placeholder="response" style="max-width:200px;">
+                  </div>
+                  <div class="form-row" style="align-items:flex-start;">
+                    <label style="padding-top:6px;">Request body</label>
+                    <textarea v-model="compCfg.submission.api_body_json" rows="4" :placeholder="PROMPT_BODY_PLACEHOLDER" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;"></textarea>
+                  </div>
+                </template>
+
+                <template v-else-if="compCfg.submission.transport === 'api_multipart'">
+                  <div class="form-row">
+                    <label>API URL</label>
+                    <input v-model="compCfg.submission.api_url" placeholder="http://localhost:5000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Prompt field</label>
+                    <input v-model="compCfg.submission.multipart_prompt_field" placeholder="prompt" style="max-width:200px;">
+                  </div>
+                  <div class="form-row">
+                    <label>File field</label>
+                    <input v-model="compCfg.submission.multipart_file_field" placeholder="file" style="max-width:200px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Response path</label>
+                    <input v-model="compCfg.submission.api_response_path" placeholder="response" style="max-width:200px;">
+                  </div>
+                </template>
+
+                <template v-else-if="compCfg.submission.transport === 'api'">
+                  <div class="form-row">
+                    <label>API URL</label>
+                    <input v-model="compCfg.submission.api_url" placeholder="http://localhost:3000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                  </div>
+                  <div class="form-row">
+                    <label>Method</label>
+                    <select v-model="compCfg.submission.api_method" style="max-width:160px;">
+                      <option value="POST">POST</option>
+                      <option value="GET">GET</option>
+                      <option value="PUT">PUT</option>
+                      <option value="PATCH">PATCH</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label>Response path</label>
+                    <input v-model="compCfg.submission.api_response_path" placeholder="response" style="max-width:200px;font-family:var(--mono);font-size:12px;">
+                  </div>
+                  <div class="form-row" style="align-items:flex-start;">
+                    <label style="padding-top:6px;">Request body</label>
+                    <textarea v-model="compCfg.submission.api_body_json" rows="4" :placeholder="PROMPT_BODY_PLACEHOLDER" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;"></textarea>
+                  </div>
+                  <div class="form-row" style="align-items:flex-start;">
+                    <label style="padding-top:6px;">Headers</label>
+                    <textarea v-model="compCfg.submission.api_headers_json" rows="2" placeholder='{}' style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;"></textarea>
+                  </div>
+                </template>
+
+                <template v-else>
+                <div class="form-row">
+                  <label>Start URL</label>
+                  <input v-model="compCfg.submission.start_url" placeholder="https://example.com/chat" style="flex:1;max-width:none;">
+                </div>
+                <div class="form-row">
+                  <label>Submit selector</label>
+                  <input v-model="compCfg.submission.submit_selector" placeholder="button[type='submit']" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                </div>
+                <div class="form-row">
+                  <label>Response selector</label>
+                  <input v-model="compCfg.submission.response_selector" placeholder=".assistant-bubble" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                </div>
+                <div class="form-row">
+                  <label>Response within (optional)</label>
+                  <input v-model="compCfg.submission.response_within_selector" placeholder="descendant locator under roots above" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                </div>
+                <div class="form-row">
+                  <label>Response text within (optional)</label>
+                  <input v-model="compCfg.submission.response_text_within_selector" placeholder="e.g. &gt; p inside bubble for model body only" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                </div>
+                <div class="form-row">
+                  <label>Submit via</label>
+                  <select v-model="compCfg.submission.submit_via" style="max-width:160px;">
+                    <option value="click">click</option>
+                    <option value="enter">enter</option>
+                  </select>
+                </div>
+                <div class="form-row">
+                  <label>Response wait (ms)</label>
+                  <input type="number" v-model.number="compCfg.submission.response_wait_ms" min="500" step="500" style="max-width:160px;">
+                </div>
+
+                <div class="cfg-section-title" style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;">
+                  Inputs
+                  <button class="btn btn-ghost btn-sm" @click="addInput">+ Add input</button>
+                </div>
+                <div v-if="compCfg.submission.inputs.length === 0" class="empty" style="padding:8px 0;">No inputs defined.</div>
+                <div v-for="(inp, i) in compCfg.submission.inputs" :key="i" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+                  <span style="color:var(--text-dim);font-size:12px;min-width:20px;">{{ i + 1 }}.</span>
+                  <input v-model="inp.selector" placeholder="CSS selector" style="flex:1;min-width:160px;font-family:var(--mono);font-size:12px;">
+                  <select v-model="inp.type" style="max-width:160px;">
+                    <option v-for="t in INPUT_TYPES" :key="t" :value="t">{{ t }}</option>
+                  </select>
+                  <label v-if="inp.type === 'file'" class="checkbox-row" style="margin:0;font-size:12px;">
+                    <input type="checkbox" :checked="inp.path_from === 'payload'" @change="e => { inp.path_from = e.target.checked ? 'payload' : ''; }">
+                    path_from: payload
+                  </label>
+                  <button class="btn btn-ghost btn-sm" @click="removeInput(i)" style="color:var(--red);border-color:var(--red);">✕</button>
+                </div>
+                </template>
+              </div>
+
+              <div class="cfg-section">
+                <div class="cfg-section-title">Settings overrides</div>
+                <p class="cfg-note">Precedence: component → site → global (<code>config.py</code> / <code>.env</code>) → shipped <code>config.defaults.yaml</code>. Check <strong>Inherit</strong> to omit a key from this component's config.</p>
+                <template v-if="settingsSchema">
+                  <div v-for="group in settingsSchema.groups" :key="group.id" class="cfg-subsection">
+                    <div class="cfg-section-title" style="font-size:13px;margin-top:12px;">{{ group.title }}</div>
+                    <div v-for="key in group.keys" :key="key" class="form-row" style="align-items:flex-start;">
+                      <label style="padding-top:6px;">{{ settingLabel(key) }}</label>
+                      <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+                        <label class="checkbox-row" style="margin:0;">
+                          <input type="checkbox" v-model="compSettingsInherited[key]" @change="onCompSettingInheritChange(key)">
+                          <span>Inherit global ({{ formatSettingGlobal(key) }})</span>
+                        </label>
+                        <template v-if="!compSettingsInherited[key]">
+                          <select v-if="settingMeta(key).type === 'select'" v-model="compSettings[key]" style="max-width:280px;">
+                            <option v-for="opt in settingMeta(key).options" :key="opt" :value="opt">{{ opt }}</option>
+                          </select>
+                          <label v-else-if="settingMeta(key).type === 'bool'" class="checkbox-row" style="margin:0;">
+                            <input type="checkbox" v-model="compSettings[key]">
+                            <span>{{ compSettings[key] ? 'Enabled' : 'Disabled' }}</span>
+                          </label>
+                          <div v-else-if="settingMeta(key).type === 'set'" style="display:flex;gap:12px;flex-wrap:wrap;">
+                            <label v-for="t in settingMeta(key).options" :key="t" style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text);">
+                              <input type="checkbox" :checked="compSettings[key] && compSettings[key].includes(t)" @change="toggleCompSettingSet(key, t)"> {{ t }}
+                            </label>
+                          </div>
+                          <input
+                            v-else-if="settingMeta(key).type === 'int' || settingMeta(key).type === 'float'"
+                            :type="settingMeta(key).type === 'float' ? 'number' : 'number'"
+                            v-model.number="compSettings[key]"
+                            :min="settingMeta(key).min"
+                            :max="settingMeta(key).max"
+                            :step="settingMeta(key).step || 1"
+                            style="max-width:200px;">
+                          <input v-else v-model="compSettings[key]" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <div v-else class="empty" style="padding:8px 0;">Loading settings schema…</div>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+                <button class="btn btn-primary" @click="saveCompCfg">Save</button>
+                <span v-if="compCfgSaved" style="color:var(--green);font-size:13px;">Saved</span>
+                <span v-if="compCfgError" style="color:var(--red);font-size:13px;">{{ compCfgError }}</span>
+              </div>
+            </template>
+          </template>
+
+          <!-- Rubrics -->
+          <template v-if="settingsTab === 'deployment'">
+            <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px;">
+              Each site has a <strong>company.json</strong> (business context) and each component has a <strong>component.json</strong> (AI product spec). These ground test generation in the specific domain. Falls back to <code>playbooks/company.json</code> / <code>playbooks/component.json</code> when not set.<br>
+              Use <strong>Auto-populate</strong> to generate from a URL (e.g. an About page for company, or the component's own URL for the AI spec).
+            </p>
+
+            <template v-if="site">
+              <div class="cfg-section">
+                <div class="cfg-section-title" style="display:flex;justify-content:space-between;align-items:center;">
+                  <span>Company Rubric <span style="font-weight:400;font-size:12px;color:var(--text-dim);">sites/{{ site }}/company.json</span></span>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <span v-if="companySaved" style="color:var(--green);font-size:12px;">Saved</span>
+                    <span v-if="companyError" style="color:var(--red);font-size:12px;">{{ companyError }}</span>
+                    <button class="btn btn-primary btn-sm" @click="saveCompanyRubric" :disabled="!site || companyGenerating">Save</button>
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+                  <input v-model="companyGenerateUrl" placeholder="https://example.com/about  - paste URL, click Auto-populate"
+                    style="flex:1;font-size:13px;" :disabled="companyGenerating">
+                  <button class="btn btn-ghost btn-sm" @click="generateCompanyRubric" :disabled="!companyGenerateUrl || companyGenerating || !site">
+                    <span v-if="companyGenerating">Generating…</span>
+                    <span v-else>Auto-populate</span>
+                  </button>
+                </div>
+                <textarea v-model="companyRubricText" spellcheck="false"
+                  style="width:100%;min-height:320px;font-family:var(--mono);font-size:12px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:10px;resize:vertical;box-sizing:border-box;margin-top:8px;"
+                  placeholder='{\n  "playbook": "...",\n  "company": { ... }\n}'></textarea>
+              </div>
+
+              <div class="cfg-section" v-if="component">
+                <div class="cfg-section-title" style="display:flex;justify-content:space-between;align-items:center;">
+                  <span>Component Rubric <span style="font-weight:400;font-size:12px;color:var(--text-dim);">sites/{{ site }}/{{ component }}/component.json</span></span>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <span v-if="componentRubricSaved" style="color:var(--green);font-size:12px;">Saved</span>
+                    <span v-if="componentRubricError" style="color:var(--red);font-size:12px;">{{ componentRubricError }}</span>
+                    <button class="btn btn-primary btn-sm" @click="saveComponentRubric" :disabled="!site || !component || componentRubricGenerating">Save</button>
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+                  <input v-model="componentGenerateUrl" :placeholder="`https://${site}  - paste the AI component URL, click Auto-populate`"
+                    style="flex:1;font-size:13px;" :disabled="componentRubricGenerating">
+                  <button class="btn btn-ghost btn-sm" @click="generateComponentRubric" :disabled="!componentGenerateUrl || componentRubricGenerating || !site || !component">
+                    <span v-if="componentRubricGenerating">Generating…</span>
+                    <span v-else>Auto-populate</span>
+                  </button>
+                </div>
+                <textarea v-model="componentRubricText" spellcheck="false"
+                  style="width:100%;min-height:320px;font-family:var(--mono);font-size:12px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:10px;resize:vertical;box-sizing:border-box;margin-top:8px;"
+                  placeholder='{\n  "playbook": "...",\n  "component": { ... }\n}'></textarea>
+              </div>
+              <div v-else class="empty" style="padding:16px 0;">Select a component to edit its rubric.</div>
+            </template>
+            <div v-else class="empty" style="padding:16px 0;">Select a site to edit deployment context.</div>
+          </template>
+
+          <!-- Browser Config -->
+          <template v-if="settingsTab === 'browser'">
+            <div class="settings-section-head">
+              <span style="font-size:12px;color:var(--text-dim);">browser-bot/browser_bot/config.py</span>
+            </div>
+            <div v-if="!hintDismissed['config']" class="hint-banner">
+              <div><strong>{{ HINTS.config.title }}</strong><p>{{ HINTS.config.text }}</p></div>
+              <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('config')">Got it</button>
+            </div>
+
+            <div class="cfg-section">
+              <div class="cfg-section-title">Fetcher</div>
+              <div class="form-row">
+                <label>Fetch Method</label>
+                <select v-model="cfg.FETCH_METHOD">
+                  <option v-for="m in FETCH_METHODS" :key="m" :value="m">{{ m }}</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>Pool Size</label>
+                <input type="number" v-model.number="cfg.POOL_SIZE" min="1" max="32">
+              </div>
+              <div class="form-row">
+                <label>Cluster Contexts</label>
+                <input type="number" v-model.number="cfg.CONTEXT_COUNT" min="1" max="32">
+              </div>
+              <div class="form-row">
+                <label>Pages / Context</label>
+                <input type="number" v-model.number="cfg.PAGES_PER_CONTEXT" min="1" max="16">
+              </div>
+            </div>
+
+            <div class="cfg-section">
+              <div class="cfg-section-title">Pool / Cluster Browser Enhancements</div>
+              <div class="checkbox-row"><input type="checkbox" v-model="cfg.POOL_CLUSTER_HUMAN_LIKE"><label>Human-like (enable all below)</label></div>
+              <div class="checkbox-row" style="padding-left:16px"><input type="checkbox" v-model="cfg.POOL_CLUSTER_ALLOW_STYLES"><label>Allow stylesheets</label></div>
+              <div class="checkbox-row" style="padding-left:16px"><input type="checkbox" v-model="cfg.POOL_CLUSTER_USE_STEALTH"><label>Playwright-stealth</label></div>
+              <div class="checkbox-row" style="padding-left:16px"><input type="checkbox" v-model="cfg.POOL_CLUSTER_USE_HUMAN_CHROME"><label>Human Chrome args</label></div>
+              <div class="checkbox-row" style="padding-left:16px"><input type="checkbox" v-model="cfg.POOL_CLUSTER_USE_HUMAN_CONTEXT"><label>Human context (locale / viewport / geo)</label></div>
+            </div>
+
+            <div class="cfg-section">
+              <div class="cfg-section-title">API / Evasion</div>
+              <div class="form-row">
+                <label>API concurrency</label>
+                <input type="number" v-model.number="cfg.API_CONCURRENCY" min="1" max="32">
+              </div>
+              <div class="form-row">
+                <label>Request delay (s)</label>
+                <input type="number" v-model.number="cfg.EVASION_REQUEST_DELAY_S" min="0" step="0.1">
+              </div>
+              <div class="form-row">
+                <label>Retry wait (s)</label>
+                <input type="number" v-model.number="cfg.EVASION_RETRY_WAIT_S" min="0" step="1">
+              </div>
+              <div class="form-row">
+                <label>Max retries</label>
+                <input type="number" v-model.number="cfg.EVASION_MAX_RETRIES" min="0" max="10">
+              </div>
+            </div>
+
+            <div class="cfg-section">
+              <div class="cfg-section-title">Human Tier</div>
+              <div class="form-row">
+                <label>Country</label>
+                <select v-model="cfg.HUMAN_COUNTRY">
+                  <option v-for="c in COUNTRIES" :key="c" :value="c">{{ c }}</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>Read delay (ms)</label>
+                <input type="number" v-model.number="cfg.HUMAN_READ_DELAY_MS" min="0" step="100">
+              </div>
+              <div class="checkbox-row"><input type="checkbox" v-model="cfg.HUMAN_ALLOW_STYLES"><label>Allow stylesheets</label></div>
+              <div class="checkbox-row"><input type="checkbox" v-model="cfg.HUMAN_SCROLL_AFTER_LOAD"><label>Scroll after load</label></div>
+              <div class="form-row" style="align-items:flex-start">
+                <label style="padding-top:6px">User Agent</label>
+                <input v-model="cfg.HUMAN_USER_AGENT" style="max-width:100%;flex:1;font-family:var(--mono);font-size:11px;">
+              </div>
+            </div>
+
+            <div class="cfg-section">
+              <div class="cfg-section-title">Browser</div>
+              <div class="checkbox-row"><input type="checkbox" v-model="cfg.HEADLESS"><label>Headless</label></div>
+              <div class="form-row">
+                <label>Chrome channel</label>
+                <select v-model="cfg.CHROME_CHANNEL">
+                  <option v-for="ch in CHANNELS" :key="ch" :value="ch">{{ ch }}</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>Chromium path</label>
+                <input v-model="cfg.CHROMIUM_EXECUTABLE_PATH" style="font-family:var(--mono);font-size:11px;">
+              </div>
+              <div class="form-row" style="align-items:flex-start">
+                <label style="padding-top:4px">Block types</label>
+                <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                  <label v-for="t in BLOCKED_OPTIONS" :key="t" style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text);">
+                    <input type="checkbox" :checked="cfg.BLOCKED_TYPES && cfg.BLOCKED_TYPES.includes(t)" @change="toggleBlocked(t)"> {{ t }}
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+              <button class="btn btn-primary" @click="saveConfig">Save</button>
+              <span v-if="cfgSaved" style="color:var(--green);font-size:13px;">Configuration saved.</span>
+              <span v-if="cfgError" style="color:var(--red);font-size:13px;">{{ cfgError }}</span>
+            </div>
+          </template>
+
+          <!-- Cache Control -->
+          <template v-if="settingsTab === 'cache'">
+            <div v-if="!hintDismissed['cache']" class="hint-banner">
+              <div><strong>{{ HINTS.cache.title }}</strong><p>{{ HINTS.cache.text }}</p></div>
+              <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('cache')">Got it</button>
+            </div>
+            <div class="checkbox-row">
+              <input type="checkbox" id="useGeminiCache" v-model="cache.useGeminiCache" @change="saveCacheSettings" :disabled="cacheSettingsSaving">
+              <label for="useGeminiCache">Use Gemini context cache (global default)</label>
+            </div>
+            <p v-if="site && component" class="cfg-note" style="margin-top:-8px;">
+              Effective for <code>{{ site }}/{{ component }}</code>:
+              <strong>{{ cache.effectiveGeminiCache ? 'enabled' : 'disabled' }}</strong>
+              <span v-if="cache.componentOverride === true"> (component override: on)</span>
+              <span v-else-if="cache.componentOverride === false"> (component override: off)</span>
+              <span v-else> (inherits global)</span>
+            </p>
+            <p v-if="cacheSettingsMsg" class="cfg-note" style="margin-top:-8px;">{{ cacheSettingsMsg }}</p>
+            <div class="checkbox-row">
+              <input type="checkbox" id="delServer" v-model="cache.deleteOnServer">
+              <label for="delServer">Also delete server-side cached content when clearing</label>
+            </div>
+            <button class="btn btn-primary" @click="startClearCache">Clear All Caches</button>
+            <div class="console" v-if="activeOutput('clear_cache').length" ref="cacheConsole">
+              <div v-for="(line, i) in activeOutput('clear_cache')" :key="i" :class="lineClass(line)">{{ line }}</div>
+            </div>
+          </template>
+        </template>
+
+      </div>
+
+      <!-- Jobs drawer -->
+      <div class="jobs-drawer" v-if="jobs.length">
+        <div class="jobs-header" @click="jobsOpen = !jobsOpen">
+          Jobs <span>{{ jobs.filter(j => j.status === 'running').length }} running</span>
+        </div>
+        <div class="jobs-body" v-show="jobsOpen">
+          <table>
+            <thead><tr><th>ID</th><th>Type</th><th>Site</th><th>Status</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="j in jobs" :key="j.id">
+                <td style="font-family:var(--mono);font-size:11px;">{{ j.id }}</td>
+                <td>{{ j.type }}</td>
+                <td>{{ j.site }}/{{ j.component }}</td>
+                <td><span class="badge" :class="'badge-' + j.status">{{ j.status }}</span></td>
+                <td>
+                  <button v-if="j.status === 'running'" class="btn btn-danger btn-sm" @click="cancelJob(j.id)">Cancel</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

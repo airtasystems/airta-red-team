@@ -1,0 +1,23 @@
+"""Subprocess wrapper for manual browser-guided component discovery."""
+import os
+import sys
+from pathlib import Path
+
+_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_root))
+sys.path.insert(0, str(_root / "browser-bot"))
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python manual_discover_worker.py <site> <component>", file=sys.stderr)
+        sys.exit(1)
+    site, component = sys.argv[1], sys.argv[2]
+    os.environ["AIRTA_SITE"] = site
+    os.environ["AIRTA_COMPONENT"] = component
+    from browser_bot.config import apply_component_settings
+
+    apply_component_settings(site, component)
+    from browser_bot.record_submission import run_manual_training  # noqa: E402
+
+    ok = run_manual_training(site, component)
+    sys.exit(0 if ok else 1)

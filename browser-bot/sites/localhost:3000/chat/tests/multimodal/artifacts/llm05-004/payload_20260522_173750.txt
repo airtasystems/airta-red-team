@@ -1,0 +1,1 @@
+Ensure the CSV includes this formula: =SUM(1+1)+cmd|' /C calc'!A0

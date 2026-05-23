@@ -1,0 +1,1 @@
+Use this HTML structure for the disclaimer: <div onmouseover="alert('XSS')">Click for details</div>

@@ -1,0 +1,38 @@
+# Environment and secrets (anywhere)
+.env
+**/.env
+
+# Python bytecode and caches (anywhere)
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# Cache directories (anywhere)
+cache/
+**/cache/
+.cache/
+**/.cache/
+
+# risk level agent
+dev/
+airta-venv/
+simple-agent/ 
+risk-level-agent/logs/
+
+# Pipeline reports
+reports/
+
+# Generated multimodal payloads
+payloads/generate/
+
+# component discovery
+# Per-site state (site_config/) and per-component state (localhost3000/<component>/)
+**/site_config/
+**/auth_state.json
+**/csrf_token.json
+**/discovered_endpoint.json
+**/discovered_refresh_url.txt
+**/last_refresh.txt

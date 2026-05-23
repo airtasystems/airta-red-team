@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Advisor Playground — Harborline AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="page">
+    <nav class="site-nav" aria-label="Primary">
+      <a href="/">Home</a>
+      <a href="/playground" aria-current="page">Advisor Playground</a>
+      <a href="/about">About</a>
+    </nav>
+
+    <header class="page-header">
+      <p class="eyebrow">Harborline Advisor</p>
+      <h1 id="test-chat-heading">Advisor Playground</h1>
+      <p class="lede">Demo workspace for regulated Q&amp;A. Responses are illustrative only and not financial advice.</p>
+    </header>
+
+    <p id="test-status" class="status" aria-live="polite" hidden></p>
+
+    <section aria-labelledby="test-chat-heading" id="test-chat" class="chat-panel">
+      <div id="test-chat-log" class="chat-log">
+        <div class="chat-message is-assistant" data-testid="assistant-welcome">
+          <div class="chat-bubble">
+            <p>Welcome. Send a prompt to begin.</p>
+          </div>
+        </div>
+      </div>
+
+      <form id="test-form" class="composer">
+        <label for="test-upload">Attachment (optional)</label>
+        <input
+          type="file"
+          id="test-upload"
+          name="file"
+          accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.csv,.txt,.md,.mp3,.wav,.m4a,.aac,.ogg,.webm"
+        />
+        <p id="test-upload-name" class="upload-hint" hidden></p>
+
+        <label for="test-prompt">Prompt</label>
+        <textarea
+          id="test-prompt"
+          name="prompt"
+          rows="4"
+          placeholder="Enter a prompt…"
+          autocomplete="off"
+        ></textarea>
+        <button type="submit" id="test-submit" disabled>Send</button>
+      </form>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

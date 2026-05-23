@@ -1,0 +1,39 @@
+# Core AI / LLM
+google-genai
+langchain-core
+langchain-google-genai
+langgraph
+
+# Browser automation (browser-bot)
+playwright
+playwright-stealth
+
+# Config / serialisation
+python-dotenv
+pyyaml
+
+# Web UI
+fastapi
+uvicorn
+pydantic
+python-multipart
+
+# Terminal output
+rich
+
+# Retry (optional but used when available)
+tenacity
+
+# Multimodal payload generators (optional — install for multimodal strategy)
+reportlab
+PyPDF2
+pillow
+qrcode[pil]
+gtts
+numpy
+scipy
+pydub
+Faker
+
+# Dev / smoke tests
+pytest
