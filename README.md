@@ -49,11 +49,12 @@ Run against site `localhost:3000`, component `main`. See [test-target/README.md]
 | OWASP Agent | `playbooks/owasp_agent.json` | ASI01–ASI10 |
 | MITRE ATLAS | `playbooks/mitre_attack.json` | ML kill-chain tactics |
 | Jailbreak Core | `playbooks/jailbreak_core.json` | DAN, encoding, injection, crescendo |
+| System Prompt Exfil | `playbooks/system_prompt_exfil.json` | SPL01–SPL10: direct, audit framing, format coercion, indirect file exfil |
 | ~~Multimodal Injection~~ | `playbooks/multimodal_injection.json` | **Deprecated** — use strategy `multimodal` + a security playbook |
 
 ## Artifact delivery (strategy `multimodal`)
 
-**Multimodal is a delivery method, not a separate taxonomy.** Use strategy `multimodal` with any security playbook (`owasp_llm`, `jailbreak_core`, `owasp_agent`, `mitre_attack`). Tests get `vector_type`, benign `prompt`, and `payload` (`generator`, `args`); assessment uses the playbook expert (e.g. OWASP LLM01 for PDF hidden-text cases).
+**Multimodal is a delivery method, not a separate taxonomy.** Use strategy `multimodal` with any security playbook (`owasp_llm`, `jailbreak_core`, `system_prompt_exfil`, `owasp_agent`, `mitre_attack`). Tests get `vector_type`, benign `prompt`, and `payload` (`generator`, `args`); assessment uses the playbook expert (e.g. OWASP LLM01 for PDF hidden-text cases).
 
 Generate artifacts with [`payloads/`](payloads/README.md). Reference suite (no per-site copies required):
 
@@ -141,6 +142,7 @@ Default playbook: **`owasp_llm`**.
 - `generate-tests/` — Attack generation (`core.py`, `strategies/`)
 - `browser-bot/` — Playwright runner
 - `risk-level-agent/` — Security assessment experts + judge
-- `pipeline/` — `convert_log.py`, `security_assess.py`
+- `pipeline/` — `convert_log.py`, `security_assess.py`, `export_security.py`
 - `playbooks/` — Security playbooks (OWASP, MITRE, jailbreak, multimodal)
+- `api-security-export.md` — Security assessment export API for AIRTA Systems
 - `test-target/` — Local vulnerable assistant lab

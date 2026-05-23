@@ -115,6 +115,53 @@
     </div>
   </div>
 
+  <!-- Create playbook modal -->
+  <div v-if="showPlaybookModal" class="modal-backdrop" @click.self="closePlaybookModal">
+    <div class="modal modal-wide">
+      <h2 class="modal-title">Create playbook</h2>
+      <p class="modal-hint">
+        Gemini generates a security playbook JSON from your topic, using
+        <code>playbooks/_template.json</code> as the structural reference.
+      </p>
+
+      <div class="modal-field">
+        <label for="pb-name">Display name</label>
+        <input id="pb-name" v-model="pbForm.name" placeholder="e.g. Tool Schema Exfiltration" @input="pbSuggestId">
+      </div>
+      <div class="modal-field">
+        <label for="pb-id">Playbook ID (filename stem)</label>
+        <input id="pb-id" v-model="pbForm.playbook_id" placeholder="e.g. tool_schema_exfil" @input="pbIdTouched = true">
+        <p class="modal-field-hint">Saved as <code>playbooks/{{ pbForm.playbook_id || 'your_id' }}.json</code></p>
+      </div>
+      <div class="modal-field">
+        <label for="pb-topic">Threat topic / scope</label>
+        <textarea id="pb-topic" v-model="pbForm.topic" rows="4" placeholder="Describe what this playbook should test — attack goals, observable success/failure, and any constraints."></textarea>
+      </div>
+      <div class="modal-field">
+        <label for="pb-focus">Assessment focus (optional)</label>
+        <textarea id="pb-focus" v-model="pbForm.assessment_focus" rows="2" placeholder="Extra guidance for categories, delivery methods, or severity framing."></textarea>
+      </div>
+      <div class="modal-field">
+        <label for="pb-categories">Category count</label>
+        <input id="pb-categories" type="number" min="3" max="12" v-model.number="pbForm.category_count" style="max-width:120px;">
+      </div>
+      <label class="checkbox-row" style="margin:0 0 12px;">
+        <input type="checkbox" v-model="pbForm.overwrite">
+        <span>Overwrite if playbook file already exists</span>
+      </label>
+
+      <div v-if="pbMsg" class="modal-status">{{ pbMsg }}</div>
+      <p v-if="pbError" class="modal-error">{{ pbError }}</p>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" @click="closePlaybookModal" :disabled="pbGenerating">Cancel</button>
+        <button type="button" class="btn btn-primary" @click="submitPlaybookGenerate" :disabled="pbGenerating || !pbForm.playbook_id || !pbForm.topic || pbForm.topic.length < 10">
+          {{ pbGenerating ? 'Generating…' : 'Generate playbook' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Run troubleshooting modal -->
   <div v-if="showRunTroubleshoot" class="modal-backdrop" @click.self="showRunTroubleshoot = false">
     <div class="modal modal-wide">
@@ -139,11 +186,9 @@
     <a href="/" class="brand" title="AIRTA Black Box">
       <img src="/img/airtasystems-logo.png" alt="AIRTA Systems" class="brand-logo" width="88">
       <div>
-        <h1>Black Box</h1>
-        <span class="brand-tag">Red Team Assessment</span>
+        <h1>AI Red Team Attack Suite</h1>
       </div>
     </a>
-    <span class="context"><a href="https://airtasystems.com" target="_blank" rel="noopener">AIRTA Systems</a></span>
     <button class="btn btn-ghost btn-sm" style="margin-left:4px;" @click="openModal" title="Manage sites and components">Manage</button>
     <div class="header-selects">
       <select v-model="site" @change="onSiteChange">
@@ -177,9 +222,12 @@
           </div>
           <div class="form-row">
             <label>Playbook</label>
-            <select v-model="gen.playbook">
-              <option v-for="f in allPlaybooks" :key="f" :value="f">{{ pretty(f) }}</option>
-            </select>
+            <div class="manage-inline" style="flex:1;max-width:none;">
+              <select v-model="gen.playbook" style="flex:1;max-width:none;">
+                <option v-for="f in allPlaybooks" :key="f" :value="f">{{ pretty(f) }}</option>
+              </select>
+              <button type="button" class="btn btn-ghost btn-sm" @click="openPlaybookModal">+ New playbook</button>
+            </div>
           </div>
           <div class="form-row">
             <label>Strategy</label>
@@ -306,29 +354,10 @@
               </div>
             </div>
 
-            <!-- Step 2: Company Discovery -->
+            <!-- Step 2: Component Discovery -->
             <div class="setup-step">
               <div class="setup-step-header">
-                <span class="step-num" :class="companyDiscoverDone ? 'done' : ''">{{ companyDiscoverDone ? '✓' : '2' }}</span>
-                Company Context
-                <span v-if="companyDiscoverDone" class="step-status ok">company.json saved</span>
-              </div>
-              <div class="setup-step-body">
-                <p>A browser will open. Navigate to a page that best describes the company - e.g. <code>/about</code>, home page, or wiki. Click <strong>Capture Page</strong> in the browser panel, or use the button below when the page is fully loaded. The page content is extracted and Gemini generates <code>company.json</code> grounding test prompts in the real company context.</p>
-                <div style="display:flex;gap:8px;">
-                  <button class="btn btn-primary" @click="startCompanyDiscover" :disabled="!site || companyDiscoverRunning">Start Company Discovery</button>
-                  <button class="btn btn-ghost" @click="sendCompanyDiscoverEnter" :disabled="!companyDiscoverJobId || !companyDiscoverRunning">Capture Current Page</button>
-                </div>
-                <div class="console" v-if="activeOutput('company_discovery').length" ref="companyDiscoverConsole">
-                  <div v-for="(line, i) in activeOutput('company_discovery')" :key="i" :class="lineClass(line)">{{ line }}</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Step 3: Component Discovery -->
-            <div class="setup-step">
-              <div class="setup-step-header">
-                <span class="step-num">3</span>
+                <span class="step-num">2</span>
                 Configure Component
               </div>
               <div class="setup-step-body">
@@ -343,7 +372,7 @@
                 </div>
 
                 <template v-if="discoverTransport === 'browser'">
-                  <p>Opens a browser with your auth loaded and records UI selectors for input, submit, and response elements. Discovery scans for file upload support and writes multimodal <code>inputs</code> (file + <code>path_from: payload</code>) into <code>config.yaml</code> when found. When you confirm the chat page, AIRTA also generates <code>component.json</code>. Use <strong>Start Discovery</strong> for the in-page guide, or <strong>Troubleshoot</strong> for automated selector detection.</p>
+                  <p>Opens a browser with your auth loaded and records UI selectors for input, submit, and response elements. Discovery scans for file upload support and writes multimodal <code>inputs</code> (file + <code>path_from: payload</code>) into <code>config.yaml</code> when found. Use <strong>Start Discovery</strong> for the in-page guide, or <strong>Troubleshoot</strong> for automated selector detection.</p>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;">
                     <button class="btn btn-primary" @click="startManualDiscover" :disabled="!site || !component || manualDiscoverRunning">Start Discovery</button>
                     <button class="btn btn-ghost" @click="startDiscover" :disabled="!site || !component || discoverRunning">Troubleshoot</button>
@@ -594,7 +623,7 @@
             <div v-for="(category, mi) in tmFile.categories" :key="mi" class="tm-category">
               <div class="tm-category-header">
                 <div>
-                  <input class="tm-category-title" v-model="category.category" @input="tmMarkDirty" placeholder="Category name">
+                  <input class="tm-category-title" v-model="category.name" @input="tmMarkDirty" placeholder="Category name">
                   <span v-if="category.focus" class="badge badge-neutral" style="margin-left:8px;">{{ category.focus }}</span>
                 </div>
                 <span style="font-size:12px;color:var(--text-dim);">{{ category.prompts.length }} prompt(s)</span>
@@ -605,7 +634,7 @@
                 <thead>
                   <tr>
                     <th style="width:180px;">ID</th>
-                    <th>Prompt</th>
+                    <th>Content</th>
                     <th style="width:36px;"></th>
                   </tr>
                 </thead>
@@ -614,7 +643,10 @@
                     <!-- View row -->
                     <tr v-if="tmEditingId !== (mi + ':' + pi)" class="tm-row" @click="tmEditingId = mi + ':' + pi">
                       <td class="tm-id">{{ p.id }}</td>
-                      <td class="tm-prompt-text">{{ p.prompt }}</td>
+                      <td class="tm-prompt-text">
+                        <span v-if="tmPromptKindLabel(p)" class="badge badge-neutral tm-kind-badge">{{ tmPromptKindLabel(p) }}</span>
+                        {{ tmPromptPreview(p) }}
+                      </td>
                       <td><button class="btn-icon tm-del" @click.stop="tmDeletePrompt(mi, pi)" title="Delete">✕</button></td>
                     </tr>
                     <!-- Edit row (expanded) -->
@@ -625,33 +657,98 @@
                             <label>ID</label>
                             <input v-model="p.id" @input="tmMarkDirty" placeholder="unique-id">
                           </div>
-                          <div class="form-row" style="margin:0;">
+                          <div class="form-row" style="margin:0;grid-column:1/-1;">
                             <label>Description</label>
                             <input v-model="p.description" @input="tmMarkDirty" placeholder="What this probes">
                           </div>
-                          <div class="form-row" style="margin:0;grid-column:1/-1;">
-                            <label>Prompt</label>
-                            <textarea v-model="p.prompt" @input="tmMarkDirty" rows="3" placeholder="Benign user message after upload"></textarea>
-                          </div>
-                          <div class="form-row" style="margin:0;">
-                            <label>Vector type</label>
-                            <input v-model="p.vector_type" @input="tmMarkDirty" placeholder="text_direct or document_pdf_hidden">
-                          </div>
-                          <div class="form-row" style="margin:0;">
-                            <label>Payload generator</label>
-                            <select v-model="p.payload.generator" @change="tmMarkDirty" v-if="p.payload">
-                              <option v-for="g in PAYLOAD_GENERATORS" :key="g" :value="g">{{ g }}</option>
-                            </select>
-                            <button v-else class="btn btn-ghost btn-sm" @click="p.payload = { generator: 'text', args: {} }; tmMarkDirty()">+ Add payload</button>
-                          </div>
-                          <div v-if="p.payload" class="form-row" style="margin:0;grid-column:1/-1;">
-                            <label>Payload args (JSON)</label>
-                            <textarea :value="JSON.stringify(p.payload.args || {}, null, 2)" @input="e => { try { p.payload.args = JSON.parse(e.target.value); tmMarkDirty(); } catch(_) {} }" rows="4"></textarea>
-                          </div>
-                          <div v-if="p.payload" style="grid-column:1/-1;display:flex;gap:8px;align-items:center;">
-                            <button class="btn btn-ghost btn-sm" @click="tmGeneratePayloadForPrompt(p)" :disabled="tmPayloadGenBusy">Generate payload file</button>
-                            <span v-if="tmPayloadGenMsg" style="font-size:12px;color:var(--text-dim);">{{ tmPayloadGenMsg }}</span>
-                          </div>
+
+                          <!-- Single-turn text -->
+                          <template v-if="tmPromptKind(p) === 'text'">
+                            <div class="form-row" style="margin:0;grid-column:1/-1;">
+                              <label>Prompt</label>
+                              <textarea v-model="p.prompt" @input="tmMarkDirty" rows="4" placeholder="User message"></textarea>
+                            </div>
+                          </template>
+
+                          <!-- Multi-turn (multi-shot, iterative, prompt chaining) -->
+                          <template v-else-if="tmPromptKind(p) === 'multi_turn'">
+                            <div class="form-row" style="margin:0;grid-column:1/-1;">
+                              <label>Turns ({{ p.prompts.length }})</label>
+                              <div class="tm-turn-list">
+                                <div v-for="(turn, ti) in p.prompts" :key="ti" class="tm-turn-block">
+                                  <div class="tm-turn-header">
+                                    <span>Turn {{ ti + 1 }}</span>
+                                    <button class="btn btn-ghost btn-sm" type="button" @click="tmRemoveTurn(p, ti)" :disabled="p.prompts.length <= 1">Remove</button>
+                                  </div>
+                                  <textarea v-model="p.prompts[ti]" @input="tmMarkDirty" rows="3" placeholder="User message for this turn"></textarea>
+                                </div>
+                                <button class="btn btn-ghost btn-sm" type="button" @click="tmAddTurn(p)">+ Add turn</button>
+                              </div>
+                            </div>
+                          </template>
+
+                          <!-- Few-shot -->
+                          <template v-else-if="tmPromptKind(p) === 'few_shot'">
+                            <div class="form-row" style="margin:0;grid-column:1/-1;">
+                              <label>In-context examples ({{ p.examples.length }})</label>
+                              <div class="tm-examples-list">
+                                <div v-for="(ex, ei) in p.examples" :key="ei" class="tm-example-block">
+                                  <div class="tm-turn-header">
+                                    <span>Example {{ ei + 1 }}</span>
+                                    <button class="btn btn-ghost btn-sm" type="button" @click="tmRemoveExample(p, ei)">Remove</button>
+                                  </div>
+                                  <textarea v-model="ex.prompt" @input="tmMarkDirty" rows="2" placeholder="Example user message"></textarea>
+                                  <div class="form-row" style="margin:8px 0 0;">
+                                    <label>Expected behavior</label>
+                                    <select v-model="ex.expected_behavior" @change="tmMarkDirty">
+                                      <option v-for="b in TM_EXAMPLE_BEHAVIORS" :key="b" :value="b">{{ b }}</option>
+                                    </select>
+                                  </div>
+                                </div>
+                                <button class="btn btn-ghost btn-sm" type="button" @click="tmAddExample(p)">+ Add example</button>
+                              </div>
+                            </div>
+                            <div class="form-row" style="margin:0;grid-column:1/-1;">
+                              <label>Final prompt</label>
+                              <textarea v-model="p.prompt" @input="tmMarkDirty" rows="3" placeholder="Final prohibited request"></textarea>
+                            </div>
+                          </template>
+
+                          <!-- Multimodal -->
+                          <template v-else-if="tmPromptKind(p) === 'multimodal'">
+                            <div class="form-row" style="margin:0;grid-column:1/-1;">
+                              <label>Prompt</label>
+                              <textarea v-model="p.prompt" @input="tmMarkDirty" rows="3" placeholder="User message after upload"></textarea>
+                            </div>
+                            <div class="form-row" style="margin:0;">
+                              <label>Vector type</label>
+                              <input v-model="p.vector_type" @input="tmMarkDirty" placeholder="text_direct or document_pdf_hidden">
+                            </div>
+                            <div class="form-row" style="margin:0;" v-if="p.context_mode !== undefined">
+                              <label>Context mode</label>
+                              <input v-model="p.context_mode" @input="tmMarkDirty" placeholder="document_analysis">
+                            </div>
+                            <div class="form-row" style="margin:0;">
+                              <label>Payload generator</label>
+                              <select v-model="p.payload.generator" @change="tmMarkDirty" v-if="p.payload">
+                                <option v-for="g in PAYLOAD_GENERATORS" :key="g" :value="g">{{ g }}</option>
+                              </select>
+                              <button v-else class="btn btn-ghost btn-sm" @click="p.payload = { generator: 'text', args: {} }; tmMarkDirty()">+ Add payload</button>
+                            </div>
+                            <div v-if="p.payload" class="form-row" style="margin:0;grid-column:1/-1;">
+                              <label>Payload args (JSON)</label>
+                              <textarea :value="JSON.stringify(p.payload.args || {}, null, 2)" @input="e => { try { p.payload.args = JSON.parse(e.target.value); tmMarkDirty(); } catch(_) {} }" rows="4"></textarea>
+                            </div>
+                            <div v-if="p.payload?.path" class="form-row" style="margin:0;grid-column:1/-1;">
+                              <label>Payload file</label>
+                              <code class="tm-payload-path">{{ p.payload.path }}</code>
+                            </div>
+                            <div v-if="p.payload" style="grid-column:1/-1;display:flex;gap:8px;align-items:center;">
+                              <button class="btn btn-ghost btn-sm" @click="tmGeneratePayloadForPrompt(p)" :disabled="tmPayloadGenBusy">Generate payload file</button>
+                              <span v-if="tmPayloadGenMsg" style="font-size:12px;color:var(--text-dim);">{{ tmPayloadGenMsg }}</span>
+                            </div>
+                          </template>
+
                           <div style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px;">
                             <button class="btn btn-ghost btn-sm" @click="tmEditingId = null">Done</button>
                           </div>
@@ -674,24 +771,28 @@
                     <input v-model="tmNewPrompt.description" placeholder="What this probes">
                   </div>
                   <div class="form-row" style="margin:0;grid-column:1/-1;">
-                    <label>Prompt</label>
-                    <textarea v-model="tmNewPrompt.prompt" rows="3" placeholder="Benign user message after upload"></textarea>
+                    <label v-if="tmIsMultiTurnStrategy()">Turns (separate with --- on its own line)</label>
+                    <label v-else-if="tmIsFewShotStrategy()">Final prompt</label>
+                    <label v-else>Prompt</label>
+                    <textarea v-model="tmNewPrompt.prompt" rows="5" :placeholder="tmIsMultiTurnStrategy() ? 'Turn 1 message\n---\nTurn 2 message\n---\nTurn 3 message' : 'User message'"></textarea>
                   </div>
-                  <div class="form-row" style="margin:0;">
-                    <label>Vector type</label>
-                    <input v-model="tmNewPrompt.vector_type" placeholder="document_pdf_hidden">
-                  </div>
-                  <div class="form-row" style="margin:0;">
-                    <label>Payload generator</label>
-                    <select v-model="tmNewPrompt.payload_generator">
-                      <option value="none">none (text-only)</option>
-                      <option v-for="g in PAYLOAD_GENERATORS" :key="g" :value="g">{{ g }}</option>
-                    </select>
-                  </div>
-                  <div v-if="tmNewPrompt.payload_generator !== 'none'" class="form-row" style="margin:0;grid-column:1/-1;">
-                    <label>Payload args (JSON)</label>
-                    <textarea v-model="tmNewPrompt.payload_args_json" rows="3"></textarea>
-                  </div>
+                  <template v-if="tmIsMultimodalStrategy()">
+                    <div class="form-row" style="margin:0;">
+                      <label>Vector type</label>
+                      <input v-model="tmNewPrompt.vector_type" placeholder="document_pdf_hidden">
+                    </div>
+                    <div class="form-row" style="margin:0;">
+                      <label>Payload generator</label>
+                      <select v-model="tmNewPrompt.payload_generator">
+                        <option value="none">none (text-only)</option>
+                        <option v-for="g in PAYLOAD_GENERATORS" :key="g" :value="g">{{ g }}</option>
+                      </select>
+                    </div>
+                    <div v-if="tmNewPrompt.payload_generator !== 'none'" class="form-row" style="margin:0;grid-column:1/-1;">
+                      <label>Payload args (JSON)</label>
+                      <textarea v-model="tmNewPrompt.payload_args_json" rows="3"></textarea>
+                    </div>
+                  </template>
                   <div style="grid-column:1/-1;display:flex;gap:8px;">
                     <button class="btn btn-primary btn-sm" @click="tmConfirmAdd(mi)" :disabled="!tmNewPrompt.id || !tmNewPrompt.prompt">Add</button>
                     <button class="btn btn-ghost btn-sm" @click="tmAddingCategory = ''">Cancel</button>
@@ -714,10 +815,22 @@
             <label>Compliance Log</label>
             <select v-model="risk.log">
               <option value="">Select...</option>
-              <option v-for="l in logs.attacks" :key="l.path" :value="l.path">{{ l.name }}</option>
+              <optgroup label="Batch by time">
+                <option
+                  v-for="w in RISK_TIME_WINDOWS"
+                  :key="w.id"
+                  :value="riskWindowValue(w.id)"
+                  :disabled="riskWindowCounts[w.id] === 0"
+                >
+                  {{ w.label }} ({{ riskWindowCounts[w.id] }} log{{ riskWindowCounts[w.id] === 1 ? '' : 's' }})
+                </option>
+              </optgroup>
+              <optgroup v-if="logs.attacks.length" label="Individual logs">
+                <option v-for="l in logs.attacks" :key="l.path" :value="l.path">{{ l.name }}</option>
+              </optgroup>
             </select>
           </div>
-          <button class="btn btn-primary" @click="startSecurityAssess" :disabled="!risk.log">Assess</button>
+          <button class="btn btn-primary" @click="startSecurityAssess" :disabled="!riskAssessEnabled">Assess</button>
           <div
             v-if="runProgress && riskTabProgressBarVisible"
             class="run-progress-wrap"
@@ -752,11 +865,24 @@
                   <label>Pipeline Report</label>
                   <select v-model="exp.report">
                     <option value="">Select...</option>
-                    <option v-for="r in logs.reports" :key="r.path" :value="r.path">{{ r.name }}</option>
+                    <optgroup label="Batch by time">
+                      <option
+                        v-for="w in RISK_TIME_WINDOWS"
+                        :key="w.id"
+                        :value="riskWindowValue(w.id)"
+                        :disabled="exportWindowCounts[w.id] === 0"
+                      >
+                        {{ w.label }} ({{ exportWindowCounts[w.id] }} report{{ exportWindowCounts[w.id] === 1 ? '' : 's' }})
+                      </option>
+                    </optgroup>
+                    <optgroup v-if="logs.reports.length" label="Individual reports">
+                      <option v-for="r in logs.reports" :key="r.path" :value="r.path">{{ r.name }}</option>
+                    </optgroup>
                   </select>
                 </div>
                 <div v-if="expPreview" class="export-preview">
-                  <span class="badge badge-neutral">{{ expPreview.count }} finding(s)</span>
+                  <span v-if="expPreview.batchReports" class="badge badge-neutral">{{ expPreview.batchReports }} report(s)</span>
+                  <span v-else class="badge badge-neutral">{{ expPreview.count }} result(s)</span>
                   <span v-if="expPreview.playbook" class="badge badge-info">{{ expPreview.playbook }}</span>
                   <span v-if="expPreview.timestamp" class="badge badge-neutral" style="font-family:monospace;font-size:11px;">{{ expPreview.timestamp }}</span>
                 </div>
@@ -800,7 +926,7 @@
                 <p class="cfg-note">Each export targets one program. Change this between submissions to send results to different programs.</p>
               </div>
 
-              <button class="btn btn-primary" @click="startExport" :disabled="!exp.report || !expCreds.has_api_key || !expCreds.host || !exp.program_id">
+              <button class="btn btn-primary" @click="startExport" :disabled="!exportEnabled || !expCreds.has_api_key || !expCreds.host || !exp.program_id">
                 Export to AIRTA Systems
               </button>
             </div>
@@ -851,7 +977,6 @@
           <!-- Inner sub-tab nav -->
           <div class="settings-tabs">
             <button :class="['settings-tab', settingsTab === 'component' && 'active']" @click="settingsTab = 'component'">Component Config</button>
-            <button :class="['settings-tab', settingsTab === 'deployment'   && 'active']" @click="settingsTab = 'deployment'">Deployment</button>
             <button :class="['settings-tab', settingsTab === 'browser'   && 'active']" @click="settingsTab = 'browser'">Browser Config</button>
             <button :class="['settings-tab', settingsTab === 'cache'     && 'active']" @click="settingsTab = 'cache'">Cache Control</button>
           </div>
@@ -1074,62 +1199,6 @@
                 <span v-if="compCfgError" style="color:var(--red);font-size:13px;">{{ compCfgError }}</span>
               </div>
             </template>
-          </template>
-
-          <!-- Rubrics -->
-          <template v-if="settingsTab === 'deployment'">
-            <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px;">
-              Each site has a <strong>company.json</strong> (business context) and each component has a <strong>component.json</strong> (AI product spec). These ground test generation in the specific domain. Falls back to <code>playbooks/company.json</code> / <code>playbooks/component.json</code> when not set.<br>
-              Use <strong>Auto-populate</strong> to generate from a URL (e.g. an About page for company, or the component's own URL for the AI spec).
-            </p>
-
-            <template v-if="site">
-              <div class="cfg-section">
-                <div class="cfg-section-title" style="display:flex;justify-content:space-between;align-items:center;">
-                  <span>Company Rubric <span style="font-weight:400;font-size:12px;color:var(--text-dim);">sites/{{ site }}/company.json</span></span>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <span v-if="companySaved" style="color:var(--green);font-size:12px;">Saved</span>
-                    <span v-if="companyError" style="color:var(--red);font-size:12px;">{{ companyError }}</span>
-                    <button class="btn btn-primary btn-sm" @click="saveCompanyRubric" :disabled="!site || companyGenerating">Save</button>
-                  </div>
-                </div>
-                <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
-                  <input v-model="companyGenerateUrl" placeholder="https://example.com/about  - paste URL, click Auto-populate"
-                    style="flex:1;font-size:13px;" :disabled="companyGenerating">
-                  <button class="btn btn-ghost btn-sm" @click="generateCompanyRubric" :disabled="!companyGenerateUrl || companyGenerating || !site">
-                    <span v-if="companyGenerating">Generating…</span>
-                    <span v-else>Auto-populate</span>
-                  </button>
-                </div>
-                <textarea v-model="companyRubricText" spellcheck="false"
-                  style="width:100%;min-height:320px;font-family:var(--mono);font-size:12px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:10px;resize:vertical;box-sizing:border-box;margin-top:8px;"
-                  placeholder='{\n  "playbook": "...",\n  "company": { ... }\n}'></textarea>
-              </div>
-
-              <div class="cfg-section" v-if="component">
-                <div class="cfg-section-title" style="display:flex;justify-content:space-between;align-items:center;">
-                  <span>Component Rubric <span style="font-weight:400;font-size:12px;color:var(--text-dim);">sites/{{ site }}/{{ component }}/component.json</span></span>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <span v-if="componentRubricSaved" style="color:var(--green);font-size:12px;">Saved</span>
-                    <span v-if="componentRubricError" style="color:var(--red);font-size:12px;">{{ componentRubricError }}</span>
-                    <button class="btn btn-primary btn-sm" @click="saveComponentRubric" :disabled="!site || !component || componentRubricGenerating">Save</button>
-                  </div>
-                </div>
-                <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
-                  <input v-model="componentGenerateUrl" :placeholder="`https://${site}  - paste the AI component URL, click Auto-populate`"
-                    style="flex:1;font-size:13px;" :disabled="componentRubricGenerating">
-                  <button class="btn btn-ghost btn-sm" @click="generateComponentRubric" :disabled="!componentGenerateUrl || componentRubricGenerating || !site || !component">
-                    <span v-if="componentRubricGenerating">Generating…</span>
-                    <span v-else>Auto-populate</span>
-                  </button>
-                </div>
-                <textarea v-model="componentRubricText" spellcheck="false"
-                  style="width:100%;min-height:320px;font-family:var(--mono);font-size:12px;background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:10px;resize:vertical;box-sizing:border-box;margin-top:8px;"
-                  placeholder='{\n  "playbook": "...",\n  "component": { ... }\n}'></textarea>
-              </div>
-              <div v-else class="empty" style="padding:16px 0;">Select a component to edit its rubric.</div>
-            </template>
-            <div v-else class="empty" style="padding:16px 0;">Select a site to edit deployment context.</div>
           </template>
 
           <!-- Browser Config -->

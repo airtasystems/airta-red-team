@@ -755,6 +755,25 @@ select { cursor: pointer; }
 .tm-edit-grid textarea { width: 100%; box-sizing: border-box; resize: vertical; font-family: var(--font); }
 .tm-add-btn { margin: 8px 12px 10px; font-size: 12px; }
 .tm-add-form { padding: 12px 14px; border-top: 1px solid var(--border); background: var(--bg-input); }
+.tm-kind-badge { display: inline-block; margin-bottom: 4px; font-size: 11px; }
+.tm-turn-list, .tm-examples-list { display: flex; flex-direction: column; gap: 10px; }
+.tm-turn-block, .tm-example-block {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+}
+.tm-turn-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.tm-turn-block textarea, .tm-example-block textarea { width: 100%; box-sizing: border-box; }
+.tm-payload-path { font-family: var(--mono); font-size: 12px; word-break: break-all; }
 .btn-icon { background: none; border: none; cursor: pointer; }
 
 /* Hint banners */

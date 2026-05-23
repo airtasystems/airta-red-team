@@ -10,7 +10,7 @@ Direct subcommands:
   discover      Interactive browser-bot menu: login, create component config, manage sites.
   run           Run generated test suite against a browser target, convert log for security-assess.
   security-assess   Run security assessment on an attack log → pipeline_report.json.
-  export        Export a pipeline report to AIRTA Systems via bulk-import API.
+  export        Export a pipeline report to AIRTA Systems (security assessment import API).
 """
 import sys
 sys.dont_write_bytecode = True
@@ -99,19 +99,6 @@ def _run_generate(args) -> None:
         sys.exit(1)
 
     env = os.environ.copy()
-    component_rubric_args: list[str] = []
-    if args.component_rubric:
-        component_rubric_args = ["--component-rubric", str(Path(args.component_rubric).resolve())]
-    # company rubric → COMPONENT_RUBRIC_JSON + COMPONENT_RUBRIC_CACHE_JSON
-    company_rubric = getattr(args, "company_rubric", None) or getattr(args, "component_rubric", None)
-    if company_rubric:
-        env["COMPONENT_RUBRIC_JSON"] = str(Path(company_rubric).resolve())
-        env["COMPONENT_RUBRIC_CACHE_JSON"] = str(Path(company_rubric).resolve())
-    # component spec rubric → COMPONENT_SPEC_RUBRIC_JSON
-    spec_rubric = getattr(args, "spec_rubric", None)
-    if spec_rubric:
-        env["COMPONENT_SPEC_RUBRIC_JSON"] = str(Path(spec_rubric).resolve())
-
     site_args: list[str] = []
     site = getattr(args, "site", "") or ""
     component = getattr(args, "component", "") or ""
@@ -119,27 +106,6 @@ def _run_generate(args) -> None:
         site_args = ["--site", site, "--component", component]
         env["AIRTA_SITE"] = site
         env["AIRTA_COMPONENT"] = component
-        # Per-site company.json + per-component component.json (same layout as web/jobs.py).
-        if not company_rubric or not spec_rubric:
-            _setup_browser_bot()
-            try:
-                from browser_bot.sites import get_site_company_rubric_path, get_component_rubric_path
-
-                if not company_rubric:
-                    p_co = get_site_company_rubric_path(site)
-                    if p_co:
-                        resolved = str(p_co.resolve())
-                        env["COMPANY_RUBRIC_JSON"] = resolved
-                        env["COMPONENT_RUBRIC_JSON"] = resolved
-                        env["COMPONENT_RUBRIC_CACHE_JSON"] = resolved
-                    else:
-                        print(f"[warn] No browser-bot/sites/{site}/company.json — check playbooks/company.json fallback")
-                if not spec_rubric:
-                    p_sp = get_component_rubric_path(site, component)
-                    if p_sp:
-                        env["COMPONENT_SPEC_RUBRIC_JSON"] = str(p_sp.resolve())
-            except ImportError:
-                pass
 
     def _materialize_after_generate(strategy: str, playbook: str) -> None:
         if strategy != "multimodal" or not (site and component):
@@ -168,7 +134,7 @@ def _run_generate(args) -> None:
         cmd = [
             sys.executable, str(generator_py),
             "--strategy", strategy, "--playbook", playbook,
-        ] + component_rubric_args + site_args
+        ] + site_args
         print(f"[*] Generating: strategy={strategy}, playbook={playbook}...")
         result = subprocess.run(cmd, cwd=str(_root), env=env)
         if result.returncode == 0:
@@ -235,17 +201,20 @@ def _run_security_assess(args) -> None:
 
     enrich_adversarial_results_with_response_html(risk_results)
 
-    severity_order = ("critical", "high", "medium", "low", "informational", "mitigated", "compliant", "indeterminate")
+    from risk_level_agent import normalize_risk_level
+
+    severity_order = ("critical", "high", "medium", "low", "informational", "indeterminate")
 
     def severity_index(level: str) -> int:
+        level = normalize_risk_level(level)
         return severity_order.index(level) if level in severity_order else len(severity_order)
 
     category_rollup: dict[str, str] = {}
     for r in risk_results:
         m = r.get("category", "")
         if m:
-            current = category_rollup.get(m, "mitigated")
-            new_level = r.get("risk_level", "indeterminate")
+            current = category_rollup.get(m, "low")
+            new_level = normalize_risk_level(r.get("risk_level", "indeterminate"))
             if severity_index(new_level) < severity_index(current):
                 category_rollup[m] = new_level
 
@@ -368,16 +337,19 @@ def _run_tests(args) -> None:
 
         enrich_adversarial_results_with_response_html(risk_results)
 
-        severity_order = ("critical", "high", "medium", "low", "informational", "mitigated", "compliant", "indeterminate")
+        from risk_level_agent import normalize_risk_level
+
+        severity_order = ("critical", "high", "medium", "low", "informational", "indeterminate")
         def severity_index(level: str) -> int:
+            level = normalize_risk_level(level)
             return severity_order.index(level) if level in severity_order else len(severity_order)
 
         category_rollup: dict[str, str] = {}
         for r in risk_results:
             m = r.get("category", "")
             if m:
-                current = category_rollup.get(m, "mitigated")
-                new_level = r.get("risk_level", "indeterminate")
+                current = category_rollup.get(m, "low")
+                new_level = normalize_risk_level(r.get("risk_level", "indeterminate"))
                 if severity_index(new_level) < severity_index(current):
                     category_rollup[m] = new_level
 
@@ -421,7 +393,7 @@ def _run_export(args) -> None:
     if not host:
         host = input("  AIRTA Systems host (e.g. app.airtasystems.com): ").strip()
     if not api_key:
-        api_key = input("  API key (write:bulk_import scope): ").strip()
+        api_key = input("  API key (write:security_assessment_import scope): ").strip()
     if not program_id:
         program_id = input("  Program ID (MongoDB ObjectId): ").strip()
     if not host or not api_key or not program_id:
@@ -435,6 +407,8 @@ def _run_export(args) -> None:
         api_key=api_key,
         program_id=program_id,
         default_level=args.default_level,
+        batch_size=args.batch_size,
+        batch_delay_seconds=args.batch_delay,
     )
 
 
@@ -549,6 +523,10 @@ def _pretty_playbook_stem(stem: str) -> str:
         "owasp_agent": "OWASP Agent",
         "mitre_attack": "MITRE ATLAS",
         "jailbreak_core": "Jailbreak Core",
+        "system_prompt_exfil": "System Prompt Exfil",
+        "prompt_injection": "Prompt Injection",
+        "sensitive_info_disclosure": "Sensitive Info Disclosure",
+        "api_secrets_disclosure": "API Keys & Secrets",
     }
     key = stem.replace("-", "_")
     if key in labels:
@@ -628,30 +606,9 @@ def _menu_generate() -> None:
     all_strategies = choice == "__create__"
     strategy = "zero_shot" if all_strategies else choice.replace("-", "_")
 
-    # Resolve per-site company rubric and per-component spec rubric, falling back to globals.
-    company_rubric_path: str | None = None
-    spec_rubric_path: str | None = None
-    if _session_site and _session_component:
-        _setup_browser_bot()
-        from browser_bot.sites import get_site_company_rubric_path, get_component_rubric_path
-        _co = get_site_company_rubric_path(_session_site)
-        _sp = get_component_rubric_path(_session_site, _session_component)
-        company_rubric_path = str(_co) if _co else None
-        spec_rubric_path = str(_sp) if _sp else None
-
-    if not company_rubric_path:
-        _global_co = _root / "playbooks" / "company.json"
-        company_rubric_path = str(_global_co) if _global_co.exists() else None
-    if not spec_rubric_path:
-        _global_sp = _root / "playbooks" / "component.json"
-        spec_rubric_path = str(_global_sp) if _global_sp.exists() else None
-
     args = SimpleNamespace(
         strategy=strategy,
         playbook=playbook,
-        component_rubric=spec_rubric_path,
-        company_rubric=company_rubric_path,
-        spec_rubric=spec_rubric_path,
         all=False,
         all_playbooks=False,
         all_strategies=all_strategies,
@@ -802,71 +759,6 @@ def _menu_clear_cache() -> None:
         print("  [-] Nothing was cleared.")
 
 
-def _menu_edit_deployment_context() -> None:
-    """Create/edit per-site company.json and per-component component.json."""
-    if not _session_site:
-        print("  No site selected.")
-        return
-
-    _setup_browser_bot()
-    from browser_bot.sites import (
-        get_site_company_rubric_path,
-        get_component_rubric_path,
-        ensure_site_dir,
-        ensure_component_dir,
-    )
-
-    global_company = _root / "playbooks" / "company.json"
-    global_component = _root / "playbooks" / "component.json"
-
-    site_company = _browser_bot_dir / "sites" / _session_site / "company.json"
-    comp_component = (
-        _browser_bot_dir / "sites" / _session_site / _session_component / "component.json"
-        if _session_component else None
-    )
-
-    print(f"\n  Rubrics for {_session_site}" + (f"/{_session_component}" if _session_component else ""))
-    print(f"\n  [1] Edit site company rubric")
-    site_label = "(exists)" if site_company.exists() else f"(will copy from {global_company.name})"
-    print(f"      {site_company.relative_to(_browser_bot_dir)} {site_label}")
-    if comp_component:
-        comp_label = "(exists)" if comp_component.exists() else f"(will copy from {global_component.name})"
-        print(f"  [2] Edit component rubric")
-        print(f"      {comp_component.relative_to(_browser_bot_dir)} {comp_label}")
-    print(f"  [3] Back")
-
-    max_choice = 3 if comp_component else 2
-    choice = input(f"\n  Choice [1-{max_choice}]: ").strip()
-
-    if choice == "1":
-        ensure_site_dir(_session_site)
-        if not site_company.exists():
-            if global_company.exists():
-                import shutil
-                shutil.copy2(global_company, site_company)
-                print(f"  Copied global company.json -> {site_company}")
-            else:
-                site_company.write_text("{}\n", encoding="utf-8")
-                print(f"  Created empty {site_company}")
-        print(f"\n  Edit: {site_company}")
-        print("  (Open in editor, save when done, then press Enter to continue...)")
-        input()
-
-    elif choice == "2" and comp_component:
-        ensure_component_dir(_session_site, _session_component)
-        if not comp_component.exists():
-            if global_component.exists():
-                import shutil
-                shutil.copy2(global_component, comp_component)
-                print(f"  Copied global component.json -> {comp_component}")
-            else:
-                comp_component.write_text("{}\n", encoding="utf-8")
-                print(f"  Created empty {comp_component}")
-        print(f"\n  Edit: {comp_component}")
-        print("  (Open in editor, save when done, then press Enter to continue...)")
-        input()
-
-
 def _show_menu() -> None:
     ctx = f" [{_session_site}/{_session_component}]" if _session_site and _session_component else ""
     print("\n" + "=" * 50)
@@ -878,9 +770,8 @@ def _show_menu() -> None:
     print("  4. Risk assessment")
     print("  5. Export to AIRTA Systems")
     print("  6. Change site/component")
-    print("  7. Edit deployment context (company/component JSON)")
-    print("  8. Clear Gemini cache")
-    print("  9. Exit")
+    print("  7. Clear Gemini cache")
+    print("  8. Exit")
     print("=" * 50)
 
 
@@ -892,7 +783,7 @@ def _interactive_menu() -> None:
 
     while True:
         _show_menu()
-        choice = input("  Choice [1-9]: ").strip()
+        choice = input("  Choice [1-8]: ").strip()
         if choice == "1":
             _menu_generate()
         elif choice == "2":
@@ -906,10 +797,8 @@ def _interactive_menu() -> None:
         elif choice == "6":
             _select_site_component()
         elif choice == "7":
-            _menu_edit_deployment_context()
-        elif choice == "8":
             _menu_clear_cache()
-        elif choice == "9":
+        elif choice == "8":
             print("\n  Bye.")
             break
         else:
@@ -939,8 +828,6 @@ def main() -> None:
                        help="Framework rubric name (default: owasp_llm).")
     gen_p.add_argument("--site", default="", help="Target site (writes suite under browser-bot/sites/<site>/...).")
     gen_p.add_argument("--component", default="", help="Target component (with --site).")
-    gen_p.add_argument("--component-rubric", metavar="PATH",
-                       help="Path to component rubric JSON (optional context for generation).")
     gen_p.add_argument("--all", action="store_true",
                        help="Generate all strategies x all playbooks.")
     gen_p.add_argument("--all-playbooks", action="store_true",
@@ -969,13 +856,30 @@ def main() -> None:
                         help="Also copy pipeline_report.json to this directory.")
 
     # --- export ---
-    exp_p = sub.add_parser("export", help="Export pipeline report to AIRTA Systems.")
+    exp_p = sub.add_parser("export", help="Export pipeline report as security assessment to AIRTA Systems.")
     exp_p.add_argument("report", help="Path to pipeline_report.json.")
     exp_p.add_argument("--host", default="", help="AIRTA Systems host (or set AIRTASYSTEMS_HOST).")
     exp_p.add_argument("--api-key", default="", help="AIRTA Systems API key (or set AIRTASYSTEMS_API_KEY).")
     exp_p.add_argument("--program-id", default="", help="Program ID (or set AIRTASYSTEMS_PROGRAM_ID).")
-    exp_p.add_argument("--default-level", choices=["informational", "low", "medium", "critical"],
-                        help="Override severity level for all results.")
+    exp_p.add_argument(
+        "--default-severity",
+        "--default-level",
+        dest="default_level",
+        choices=["indeterminate", "informational", "low", "medium", "high", "critical"],
+        help="Fallback severity when a result row lacks risk_level.",
+    )
+    exp_p.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Results per POST (default: AIRTASYSTEMS_EXPORT_BATCH_SIZE or 25).",
+    )
+    exp_p.add_argument(
+        "--batch-delay",
+        type=float,
+        default=None,
+        help="Seconds between batches (default: AIRTASYSTEMS_EXPORT_DELAY_SECONDS or 2).",
+    )
 
     args = parser.parse_args()
 

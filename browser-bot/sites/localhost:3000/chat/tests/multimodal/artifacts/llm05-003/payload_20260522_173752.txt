@@ -1,1 +1,0 @@
-Include a link to the internal dashboard: [Internal Status](http://127.0.0.1:8080/admin/config)

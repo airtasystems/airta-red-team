@@ -6,6 +6,7 @@ import asyncio
 import io
 import os
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -174,14 +175,172 @@ def _warn_multimodal_preflight(job: Job, suite_path: Path, suite_data: dict) -> 
         pass
 
 _SEVERITY_ORDER = (
-    "critical", "high", "medium", "low", "informational", "mitigated", "compliant", "indeterminate",
+    "critical", "high", "medium", "low", "informational", "indeterminate",
 )
+
+# Log batch windows for security assessment and export (UI → job params).
+LOG_TIME_WINDOWS: dict[str, float] = {
+    "1h": 1.0,
+    "4h": 4.0,
+    "24h": 24.0,
+}
+# Legacy alias
+ASSESS_TIME_WINDOWS = LOG_TIME_WINDOWS
+
+
+def _component_logs_dir(site: str, component: str) -> Path:
+    bb_dir = _root / "browser-bot"
+    if str(bb_dir) not in sys.path:
+        sys.path.insert(0, str(bb_dir))
+    from browser_bot.sites import get_component_path
+
+    return get_component_path(site, component) / "logs"
+
+
+def _paths_in_time_window(paths: list[Path], window_id: str) -> list[Path]:
+    hours = LOG_TIME_WINDOWS.get(window_id)
+    if hours is None:
+        return []
+    import time
+
+    cutoff = time.time() - hours * 3600
+    return [p for p in paths if p.stat().st_mtime >= cutoff]
+
+
+def _time_window_label(window_id: str) -> str:
+    return {"1h": "last hour", "4h": "last 4 hours", "24h": "last 24 hours"}.get(
+        window_id, window_id
+    )
+
+
+def _list_attack_log_paths(site: str, component: str) -> list[Path]:
+    """Attack logs for a component, newest first."""
+    logs_dir = _component_logs_dir(site, component)
+    if not logs_dir.is_dir():
+        return []
+    paths = list(logs_dir.glob("*/attack_log.json")) + list(logs_dir.glob("attack_log*.json"))
+    return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _list_pipeline_report_paths(site: str, component: str) -> list[Path]:
+    """Pipeline reports for a component, newest first."""
+    logs_dir = _component_logs_dir(site, component)
+    if not logs_dir.is_dir():
+        return []
+    paths = list(logs_dir.glob("*/pipeline_report.json")) + list(
+        logs_dir.glob("pipeline_report*.json")
+    )
+    return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _attack_logs_in_window(site: str, component: str, window_id: str) -> list[Path]:
+    return _paths_in_time_window(_list_attack_log_paths(site, component), window_id)
+
+
+def _pipeline_reports_in_window(site: str, component: str, window_id: str) -> list[Path]:
+    return _paths_in_time_window(_list_pipeline_report_paths(site, component), window_id)
+
+
+def _resolve_security_assess_logs(job: Job) -> list[Path]:
+    """Single attack_log, explicit attack_logs list, or time_window batch."""
+    time_window = (job.params.get("time_window") or "").strip()
+    if time_window:
+        if not (job.site and job.component):
+            raise ValueError("time_window assessment requires site and component context")
+        logs = _attack_logs_in_window(job.site, job.component, time_window)
+        label = _time_window_label(time_window)
+        if not logs:
+            print(f"[!] No compliance logs found for {label}")
+        else:
+            print(f"[*] Batch assessment ({label}): {len(logs)} log(s)")
+        return logs
+
+    attack_logs = job.params.get("attack_logs")
+    if isinstance(attack_logs, list) and attack_logs:
+        paths: list[Path] = []
+        for raw in attack_logs:
+            cl_path = Path(str(raw))
+            if not cl_path.is_absolute():
+                cl_path = _root / cl_path
+            paths.append(cl_path)
+        print(f"[*] Batch assessment: {len(paths)} log(s)")
+        return paths
+
+    attack_log = job.params.get("attack_log", "")
+    if not attack_log:
+        raise ValueError("No attack_log or time_window specified")
+    cl_path = Path(attack_log)
+    if not cl_path.is_absolute():
+        cl_path = _root / cl_path
+    return [cl_path]
+
+
+def _assess_attack_log(cl_path: Path) -> Path:
+    """Run security assessment on one attack log; write pipeline_report.json."""
+    import importlib.util
+    import json as _json
+
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    rla_file = _root / "risk-level-agent" / "risk_level_agent.py"
+    if rla_file.exists() and "risk_level_agent" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("risk_level_agent", rla_file)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["risk_level_agent"] = mod
+            spec.loader.exec_module(mod)
+
+    from pipeline.security_assess import run_security_assessment
+
+    if not cl_path.exists():
+        raise FileNotFoundError(f"Attack log not found: {cl_path}")
+
+    print(f"[*] Running security assessment on: {cl_path.name}")
+    risk_results = run_security_assessment(cl_path)
+
+    log_data = _json.loads(cl_path.read_text(encoding="utf-8"))
+    all_log_results = log_data.get("results", [])
+    attack_by_id = {r["id"]: r for r in all_log_results if "id" in r}
+    for r in risk_results:
+        cl_entry = attack_by_id.get(r.get("id", ""), {})
+        for fld in ("description", "expected_behavior", "status", "ok", "error"):
+            if fld not in r:
+                r[fld] = cl_entry.get(fld)
+
+    from pipeline.response_html import enrich_adversarial_results_with_response_html
+
+    enrich_adversarial_results_with_response_html(risk_results)
+
+    category_rollup = _category_rollup_from_results(risk_results)
+
+    from datetime import datetime as _dt
+
+    ts = _dt.now().strftime("%Y-%m-%dT%H-%M-%S")
+    report = {
+        "timestamp": ts,
+        "playbook": log_data.get("playbook", log_data.get("framework", "")),
+        "playbook_id": log_data.get("playbook_id", ""),
+        "source_file": log_data.get("source_file", ""),
+        "run_log_dir": str(cl_path.parent),
+        "attack_log": str(cl_path),
+        "adversarial_results": risk_results,
+        "category_rollup": category_rollup,
+    }
+    report_path = cl_path.parent / "pipeline_report.json"
+    report_path.write_text(_json.dumps(report, indent=2), encoding="utf-8")
+    print(f"[+] Pipeline report: {report_path}")
+    print(f"[+] Assessed: {len(risk_results)}")
+    for m, level in sorted(category_rollup.items()):
+        print(f"  {m[:60]}: {level}")
+    return report_path
 
 
 def _category_rollup_from_results(risk_results: list) -> dict[str, str]:
     """Per-category worst severity across assessed prompts."""
+    from risk_level_agent import normalize_risk_level
 
     def _idx(level: str) -> int:
+        level = normalize_risk_level(level)
         return _SEVERITY_ORDER.index(level) if level in _SEVERITY_ORDER else len(_SEVERITY_ORDER)
 
     rollup: dict[str, str] = {}
@@ -189,8 +348,8 @@ def _category_rollup_from_results(risk_results: list) -> dict[str, str]:
         cat = r.get("category", "")
         if not cat:
             continue
-        current = rollup.get(cat, "mitigated")
-        new_level = r.get("risk_level", "indeterminate")
+        current = rollup.get(cat, "low")
+        new_level = normalize_risk_level(r.get("risk_level", "indeterminate"))
         if _idx(new_level) < _idx(current):
             rollup[cat] = new_level
     return rollup
@@ -337,8 +496,6 @@ async def start_job(job_type: str, site: str, component: str, params: dict | Non
         job._task = asyncio.create_task(_start_generate(job))
     elif job_type == "login":
         job._task = asyncio.create_task(_start_login(job))
-    elif job_type == "company_discovery":
-        job._task = asyncio.create_task(_start_company_discovery(job))
     elif job_type == "discover":
         job._task = asyncio.create_task(_start_discover(job))
     elif job_type == "manual_discover":
@@ -372,58 +529,16 @@ async def _start_generate(job: Job):
     strategy = job.params.get("strategy", "zero_shot")
     playbook = job.params.get("playbook", "owasp_llm")
 
-    # Resolve per-site company rubric and per-component spec rubric, falling back to globals.
-    bb_dir = _root / "browser-bot"
-    if str(bb_dir) not in sys.path:
-        sys.path.insert(0, str(bb_dir))
-    try:
-        from browser_bot.sites import get_site_company_rubric_path, get_component_rubric_path
-        company_rubric = get_site_company_rubric_path(job.site) if job.site else None
-        spec_rubric = (
-            get_component_rubric_path(job.site, job.component) if (job.site and job.component) else None
-        )
-        global_company = _root / "playbooks" / "company.json"
-        global_spec = _root / "playbooks" / "component.json"
-        if job.site and not company_rubric and global_company.is_file():
-            job.output.append(
-                f"[warn] No browser-bot/sites/{job.site}/company.json — falling back to playbooks/company.json"
-            )
-            company_rubric = global_company
-        elif not company_rubric and global_company.is_file():
-            company_rubric = global_company
-        if job.site and job.component and not spec_rubric and global_spec.is_file():
-            job.output.append(
-                f"[warn] No browser-bot/sites/{job.site}/{job.component}/component.json — "
-                "falling back to playbooks/component.json"
-            )
-            spec_rubric = global_spec
-        elif not spec_rubric and global_spec.is_file():
-            spec_rubric = global_spec
-    except ImportError:
-        company_rubric = _root / "playbooks" / "company.json" if (_root / "playbooks" / "company.json").exists() else None
-        spec_rubric = _root / "playbooks" / "component.json" if (_root / "playbooks" / "component.json").exists() else None
-
     env = os.environ.copy()
     if job.site:
         env["AIRTA_SITE"] = job.site
     if job.component:
         env["AIRTA_COMPONENT"] = job.component
-    if company_rubric:
-        resolved = str(company_rubric.resolve() if hasattr(company_rubric, "resolve") else company_rubric)
-        env["COMPANY_RUBRIC_JSON"] = resolved
-        env["COMPONENT_RUBRIC_JSON"] = resolved
-        env["COMPONENT_RUBRIC_CACHE_JSON"] = resolved
-    if spec_rubric:
-        env["COMPONENT_SPEC_RUBRIC_JSON"] = str(
-            spec_rubric.resolve() if hasattr(spec_rubric, "resolve") else spec_rubric
-        )
 
     def _build_cmd(strat: str) -> list[str]:
         cmd = [sys.executable, str(generator_py), "--strategy", strat, "--playbook", playbook]
         if job.site and job.component:
             cmd += ["--site", job.site, "--component", job.component]
-        if spec_rubric:
-            cmd += ["--component-rubric", str(spec_rubric)]
         return cmd
 
     if strategy == "__all__":
@@ -477,12 +592,6 @@ async def _start_login(job: Job):
         job._event.set()
         return
     cmd = [sys.executable, "-u", str(worker), url]
-    await _run_subprocess_job(job, cmd)
-
-
-async def _start_company_discovery(job: Job):
-    worker = _root / "web" / "company_discovery_worker.py"
-    cmd = [sys.executable, "-u", str(worker), job.site]
     await _run_subprocess_job(job, cmd)
 
 
@@ -758,11 +867,9 @@ async def _start_sample_request(job: Job):
 
 
 async def _start_security_assess(job: Job):
-    attack_log = job.params.get("attack_log", "")
-
     def _do():
-        if str(_root) not in sys.path:
-            sys.path.insert(0, str(_root))
+        import json as _json
+
         try:
             from dotenv import load_dotenv
 
@@ -772,57 +879,33 @@ async def _start_security_assess(job: Job):
             pass
         _prepare_component_context(job)
 
-        import importlib.util
-        rla_file = _root / "risk-level-agent" / "risk_level_agent.py"
-        if rla_file.exists() and "risk_level_agent" not in sys.modules:
-            spec = importlib.util.spec_from_file_location("risk_level_agent", rla_file)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                sys.modules["risk_level_agent"] = mod
-                spec.loader.exec_module(mod)
+        log_paths = _resolve_security_assess_logs(job)
+        if not log_paths:
+            return
 
-        from pipeline.security_assess import run_security_assessment
-        import json as _json
+        total = len(log_paths)
+        if total > 1:
+            print(
+                f"[airta_progress] {_json.dumps({'type': 'batch_start', 'phase': 'risk', 'total': total}, ensure_ascii=False)}",
+                flush=True,
+            )
 
-        cl_path = Path(attack_log)
-        if not cl_path.is_absolute():
-            cl_path = _root / cl_path
-        print(f"[*] Running security assessment on: {cl_path.name}")
-        risk_results = run_security_assessment(cl_path)
+        for i, cl_path in enumerate(log_paths, 1):
+            if total > 1:
+                print(
+                    f"[airta_progress] {_json.dumps({'type': 'batch_progress', 'phase': 'risk', 'current': i, 'total': total, 'log': cl_path.name}, ensure_ascii=False)}",
+                    flush=True,
+                )
+            try:
+                _assess_attack_log(cl_path)
+            except Exception as exc:
+                print(f"[!] Assessment failed for {cl_path}: {exc}", flush=True)
 
-        log_data = _json.loads(cl_path.read_text(encoding="utf-8"))
-        all_log_results = log_data.get("results", [])
-        attack_by_id = {r["id"]: r for r in all_log_results if "id" in r}
-        for r in risk_results:
-            cl_entry = attack_by_id.get(r.get("id", ""), {})
-            for fld in ("description", "expected_behavior", "status", "ok", "error"):
-                if fld not in r:
-                    r[fld] = cl_entry.get(fld)
-
-        from pipeline.response_html import enrich_adversarial_results_with_response_html
-
-        enrich_adversarial_results_with_response_html(risk_results)
-
-        category_rollup = _category_rollup_from_results(risk_results)
-
-        from datetime import datetime as _dt
-        ts = _dt.now().strftime("%Y-%m-%dT%H-%M-%S")
-        report = {
-            "timestamp": ts,
-            "playbook": log_data.get("playbook", log_data.get("framework", "")),
-            "playbook_id": log_data.get("playbook_id", ""),
-            "source_file": log_data.get("source_file", ""),
-            "run_log_dir": str(cl_path.parent),
-            "attack_log": str(cl_path),
-            "adversarial_results": risk_results,
-            "category_rollup": category_rollup,
-        }
-        report_path = cl_path.parent / "pipeline_report.json"
-        report_path.write_text(_json.dumps(report, indent=2), encoding="utf-8")
-        print(f"[+] Pipeline report: {report_path}")
-        print(f"[+] Assessed: {len(risk_results)}")
-        for m, level in sorted(category_rollup.items()):
-            print(f"  {m[:60]}: {level}")
+        if total > 1:
+            print(
+                f"[airta_progress] {_json.dumps({'type': 'batch_done', 'phase': 'risk', 'total': total}, ensure_ascii=False)}",
+                flush=True,
+            )
 
     await _run_thread_job(job, _do)
 
@@ -843,8 +926,41 @@ def _load_env_vars() -> dict[str, str]:
     return result
 
 
-async def _start_export(job: Job):
+def _resolve_export_reports(job: Job) -> list[Path]:
+    """Single report, explicit reports list, or time_window batch."""
+    time_window = (job.params.get("time_window") or "").strip()
+    if time_window:
+        if not (job.site and job.component):
+            raise ValueError("time_window export requires site and component context")
+        reports = _pipeline_reports_in_window(job.site, job.component, time_window)
+        label = _time_window_label(time_window)
+        if not reports:
+            print(f"[!] No pipeline reports found for {label}")
+        else:
+            print(f"[*] Batch export ({label}): {len(reports)} report(s)")
+        return reports
+
+    report_list = job.params.get("reports")
+    if isinstance(report_list, list) and report_list:
+        paths: list[Path] = []
+        for raw in report_list:
+            rp = Path(str(raw))
+            if not rp.is_absolute():
+                rp = _root / rp
+            paths.append(rp)
+        print(f"[*] Batch export: {len(paths)} report(s)")
+        return paths
+
     report = job.params.get("report", "")
+    if not report:
+        raise ValueError("No report or time_window specified")
+    rp = Path(report)
+    if not rp.is_absolute():
+        rp = _root / rp
+    return [rp]
+
+
+async def _start_export(job: Job):
     default_level = job.params.get("default_level")
 
     # host + api_key come from .env; program_id is per-export from params
@@ -860,13 +976,51 @@ async def _start_export(job: Job):
         return
 
     def _do():
+        import json as _json
+
         if str(_root) not in sys.path:
             sys.path.insert(0, str(_root))
         from pipeline.export_airta import export_pipeline_report
-        rp = Path(report)
-        if not rp.is_absolute():
-            rp = _root / rp
-        export_pipeline_report(rp, host=host, api_key=api_key, program_id=program_id, default_level=default_level)
+        from pipeline.export_security import export_batch_delay_seconds
+
+        report_paths = _resolve_export_reports(job)
+        if not report_paths:
+            return
+
+        report_delay = export_batch_delay_seconds()
+        total = len(report_paths)
+        if total > 1:
+            print(
+                f"[airta_progress] {_json.dumps({'type': 'batch_start', 'phase': 'export', 'total': total}, ensure_ascii=False)}",
+                flush=True,
+            )
+
+        for i, rp in enumerate(report_paths, 1):
+            if total > 1:
+                print(
+                    f"[airta_progress] {_json.dumps({'type': 'batch_progress', 'phase': 'export', 'current': i, 'total': total, 'log': rp.name}, ensure_ascii=False)}",
+                    flush=True,
+                )
+            try:
+                export_pipeline_report(
+                    rp,
+                    host=host,
+                    api_key=api_key,
+                    program_id=program_id,
+                    default_level=default_level,
+                )
+            except Exception as exc:
+                print(f"[!] Export failed for {rp}: {exc}", flush=True)
+
+            if i < total and report_delay > 0:
+                print(f"[*] Waiting {report_delay:.1f}s before next report export...", flush=True)
+                time.sleep(report_delay)
+
+        if total > 1:
+            print(
+                f"[airta_progress] {_json.dumps({'type': 'batch_done', 'phase': 'export', 'total': total}, ensure_ascii=False)}",
+                flush=True,
+            )
 
     await _run_thread_job(job, _do)
 

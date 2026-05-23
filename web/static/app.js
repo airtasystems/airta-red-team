@@ -65,6 +65,96 @@ createApp({
     const tmImporting = ref(false);
     const tmImportMsg = ref('');
 
+    const TM_MULTI_TURN_STRATEGIES = new Set(['multi_shot', 'iterative', 'prompt_chaining']);
+    const TM_FEW_SHOT_STRATEGIES = new Set(['few_shot']);
+    const TM_EXAMPLE_BEHAVIORS = ['comply', 'refuse'];
+
+    function tmStrategyNorm() {
+      return (tmStrategy.value || '').replace(/-/g, '_');
+    }
+
+    function tmIsMultiTurnStrategy() {
+      return TM_MULTI_TURN_STRATEGIES.has(tmStrategyNorm());
+    }
+
+    function tmIsFewShotStrategy() {
+      return TM_FEW_SHOT_STRATEGIES.has(tmStrategyNorm());
+    }
+
+    function tmIsMultimodalStrategy() {
+      return tmStrategyNorm() === 'multimodal';
+    }
+
+    function tmPromptKind(p) {
+      if (Array.isArray(p?.prompts) && p.prompts.length) return 'multi_turn';
+      if (Array.isArray(p?.examples) && p.examples.length) return 'few_shot';
+      if (p?.payload || (p?.vector_type && p.vector_type !== 'text_direct')) return 'multimodal';
+      return 'text';
+    }
+
+    function tmPromptKindLabel(p) {
+      const labels = {
+        multi_turn: `${p.prompts?.length || 0}-turn`,
+        few_shot: `few-shot (${p.examples?.length || 0})`,
+        multimodal: p.vector_type || 'artifact',
+        text: '',
+      };
+      return labels[tmPromptKind(p)] || '';
+    }
+
+    function tmPromptPreview(p) {
+      const kind = tmPromptKind(p);
+      const clip = (s, n = 220) => {
+        const t = (s || '').trim();
+        return t.length <= n ? t : t.slice(0, n) + '…';
+      };
+      if (kind === 'multi_turn') {
+        const turns = p.prompts || [];
+        if (turns.length === 1) return clip(turns[0]);
+        return turns.map((t, i) => `Turn ${i + 1}: ${clip(t, 120)}`).join('\n');
+      }
+      if (kind === 'few_shot') {
+        const ex = p.examples || [];
+        const lines = ex.map((e, i) => `Ex ${i + 1}: ${clip(e.prompt, 80)}`);
+        if (p.prompt) lines.push(`Final: ${clip(p.prompt, 120)}`);
+        return lines.join('\n');
+      }
+      return clip(p.prompt);
+    }
+
+    function tmNormalizeSuite(data) {
+      if (!data || !Array.isArray(data.categories)) return data;
+      for (const cat of data.categories) {
+        if (!cat.name && cat.category) cat.name = cat.category;
+        if (!cat.name && cat.mandate) cat.name = cat.mandate;
+      }
+      return data;
+    }
+
+    function tmAddTurn(p) {
+      if (!Array.isArray(p.prompts)) p.prompts = [];
+      p.prompts.push('');
+      tmMarkDirty();
+    }
+
+    function tmRemoveTurn(p, turnIdx) {
+      if (!Array.isArray(p.prompts)) return;
+      p.prompts.splice(turnIdx, 1);
+      tmMarkDirty();
+    }
+
+    function tmAddExample(p) {
+      if (!Array.isArray(p.examples)) p.examples = [];
+      p.examples.push({ prompt: '', expected_behavior: 'comply' });
+      tmMarkDirty();
+    }
+
+    function tmRemoveExample(p, exampleIdx) {
+      if (!Array.isArray(p.examples)) return;
+      p.examples.splice(exampleIdx, 1);
+      tmMarkDirty();
+    }
+
     // --- Payloads tab ---
     const payloadTypes = ref([]);
     const payloadAssetType = ref('text');
@@ -164,11 +254,16 @@ createApp({
       const strat = encodeURIComponent(tmStrategy.value);
       // tmPlaybook.value holds the full path; extract stem from it
       const stem = tmPlaybook.value.split('/').pop().replace(/\.json$/, '');
-      tmFile.value = await api(`/api/sites/${s}/${c}/tests/${strat}/${encodeURIComponent(stem)}`);
+      tmFile.value = tmNormalizeSuite(await api(`/api/sites/${s}/${c}/tests/${strat}/${encodeURIComponent(stem)}`));
     }
 
     function tmSnapshotPlain() {
-      return JSON.parse(JSON.stringify(tmFile.value));
+      const data = JSON.parse(JSON.stringify(tmFile.value));
+      for (const cat of data.categories || []) {
+        if (cat.category && !cat.name) cat.name = cat.category;
+        delete cat.category;
+      }
+      return data;
     }
 
     async function tmSave() {
@@ -259,17 +354,32 @@ createApp({
     }
 
     function tmConfirmAdd(categoryIdx) {
-      const p = {
-        id: tmNewPrompt.id.trim(),
-        description: tmNewPrompt.description.trim(),
-        prompt: tmNewPrompt.prompt.trim(),
-      };
-      if (tmNewPrompt.vector_type && tmNewPrompt.vector_type !== 'text_direct') {
-        p.vector_type = tmNewPrompt.vector_type;
+      const id = tmNewPrompt.id.trim();
+      const description = tmNewPrompt.description.trim();
+      const text = tmNewPrompt.prompt.trim();
+      if (!id) return;
+
+      const p = { id, description };
+      if (tmIsMultiTurnStrategy()) {
+        const turns = text.split(/\n---\n/).map(s => s.trim()).filter(Boolean);
+        if (!turns.length) return;
+        p.prompts = turns;
+      } else if (tmIsFewShotStrategy()) {
+        if (!text) return;
+        p.examples = [];
+        p.prompt = text;
+      } else {
+        if (!text) return;
+        p.prompt = text;
+        if (tmIsMultimodalStrategy()) {
+          if (tmNewPrompt.vector_type && tmNewPrompt.vector_type !== 'text_direct') {
+            p.vector_type = tmNewPrompt.vector_type;
+          }
+          const payload = tmBuildPayloadFromEditor(tmNewPrompt);
+          if (payload) p.payload = payload;
+        }
       }
-      const payload = tmBuildPayloadFromEditor(tmNewPrompt);
-      if (payload) p.payload = payload;
-      if (!p.id || !p.prompt) return;
+
       tmFile.value.categories[categoryIdx].prompts.push(p);
       tmDirty.value = true;
       tmAddingCategory.value = '';
@@ -327,22 +437,152 @@ createApp({
       }
     }
 
-    const PLAYBOOK_DEFAULT_STRATEGY = {
-      owasp_llm: 'multimodal',
-      owasp_agent: 'multimodal',
-      mitre_attack: 'multimodal',
-      jailbreak_core: 'jailbreak',
-    };
     const STRATEGY_DEFAULT_PLAYBOOK = {
       multimodal: 'owasp_llm',
       jailbreak: 'jailbreak_core',
     };
 
-    const gen = reactive({ strategy: 'zero_shot', playbook: 'owasp_llm' });
+    const gen = reactive({ strategy: '__all__', playbook: 'owasp_llm' });
+    const showPlaybookModal = ref(false);
+    const pbGenerating = ref(false);
+    const pbError = ref('');
+    const pbMsg = ref('');
+    const pbForm = reactive({
+      playbook_id: '',
+      name: '',
+      topic: '',
+      assessment_focus: '',
+      category_count: 8,
+      overwrite: false,
+    });
+    const pbIdTouched = ref(false);
+
+    function pbSlugify(text) {
+      return (text || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 64);
+    }
+
+    function pbSuggestId() {
+      if (pbIdTouched.value) return;
+      pbForm.playbook_id = pbSlugify(pbForm.name);
+    }
+
+    function openPlaybookModal() {
+      pbError.value = '';
+      pbMsg.value = '';
+      pbIdTouched.value = false;
+      pbForm.playbook_id = '';
+      pbForm.name = '';
+      pbForm.topic = '';
+      pbForm.assessment_focus = '';
+      pbForm.category_count = 8;
+      pbForm.overwrite = false;
+      showPlaybookModal.value = true;
+    }
+
+    function closePlaybookModal() {
+      if (pbGenerating.value) return;
+      showPlaybookModal.value = false;
+    }
+
+    async function submitPlaybookGenerate() {
+      pbError.value = '';
+      pbMsg.value = '';
+      const playbook_id = pbSlugify(pbForm.playbook_id);
+      const topic = pbForm.topic.trim();
+      if (!playbook_id) {
+        pbError.value = 'Enter a playbook ID.';
+        return;
+      }
+      if (topic.length < 10) {
+        pbError.value = 'Topic must be at least 10 characters.';
+        return;
+      }
+      pbGenerating.value = true;
+      try {
+        const result = await api('/api/playbooks/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playbook_id,
+            name: pbForm.name.trim(),
+            topic,
+            assessment_focus: pbForm.assessment_focus.trim(),
+            category_count: pbForm.category_count,
+            overwrite: pbForm.overwrite,
+          }),
+        });
+        allPlaybooks.value = await api('/api/playbooks');
+        gen.playbook = result.playbook_id;
+        pbMsg.value = `Created ${result.category_count} categories → ${result.path}`;
+        setTimeout(() => {
+          showPlaybookModal.value = false;
+          pbMsg.value = '';
+        }, 1200);
+      } catch (e) {
+        pbError.value = 'Generate failed: ' + e.message;
+      } finally {
+        pbGenerating.value = false;
+      }
+    }
+
     const run = reactive({ strategy: '', playbook: '', assess: false });
     const runArtifactStatus = ref([]);
     const runUploadWarning = ref('');
     const risk = reactive({ log: '' });
+    const RISK_TIME_WINDOWS = [
+      { id: '1h', label: 'Last hour', seconds: 3600 },
+      { id: '4h', label: 'Last 4 hours', seconds: 14400 },
+      { id: '24h', label: 'Last 24 hours (daily)', seconds: 86400 },
+    ];
+    const RISK_WINDOW_PREFIX = '__window:';
+
+    function riskWindowValue(windowId) {
+      return `${RISK_WINDOW_PREFIX}${windowId}`;
+    }
+
+    function riskWindowIdFromValue(value) {
+      if (!value || !value.startsWith(RISK_WINDOW_PREFIX)) return '';
+      return value.slice(RISK_WINDOW_PREFIX.length);
+    }
+
+    const riskWindowCounts = computed(() => {
+      const now = Date.now() / 1000;
+      const attacks = logs.attacks || [];
+      const counts = {};
+      for (const w of RISK_TIME_WINDOWS) {
+        counts[w.id] = attacks.filter(a => (a.mtime || 0) >= now - w.seconds).length;
+      }
+      return counts;
+    });
+
+    const riskAssessEnabled = computed(() => {
+      if (!risk.log) return false;
+      const windowId = riskWindowIdFromValue(risk.log);
+      if (windowId) return (riskWindowCounts.value[windowId] || 0) > 0;
+      return true;
+    });
+
+    const exportWindowCounts = computed(() => {
+      const now = Date.now() / 1000;
+      const reports = logs.reports || [];
+      const counts = {};
+      for (const w of RISK_TIME_WINDOWS) {
+        counts[w.id] = reports.filter(r => (r.mtime || 0) >= now - w.seconds).length;
+      }
+      return counts;
+    });
+
+    const exportEnabled = computed(() => {
+      if (!exp.report) return false;
+      const windowId = riskWindowIdFromValue(exp.report);
+      if (windowId) return (exportWindowCounts.value[windowId] || 0) > 0;
+      return true;
+    });
     const exp = reactive({ report: '', program_id: '' });
     const expResult = ref(null);
     const expPreview = ref(null);
@@ -397,6 +637,14 @@ createApp({
       expPreview.value = null;
       expResult.value = null;
       if (!path) return;
+      const windowId = riskWindowIdFromValue(path);
+      if (windowId) {
+        expPreview.value = {
+          batchReports: exportWindowCounts.value[windowId] || 0,
+          batchLabel: RISK_TIME_WINDOWS.find(w => w.id === windowId)?.label || windowId,
+        };
+        return;
+      }
       try {
         const data = await api(`/api/log?path=${encodeURIComponent(path)}`);
         expPreview.value = {
@@ -702,114 +950,6 @@ createApp({
       compCfg.submission.inputs.splice(i, 1);
     }
 
-    // Rubrics
-    const companyRubricText = ref('');
-    const companySaved = ref(false);
-    const companyError = ref('');
-    const companyGenerating = ref(false);
-    const companyGenerateUrl = ref('');
-    const componentRubricText = ref('');
-    const componentRubricSaved = ref(false);
-    const componentRubricError = ref('');
-    const componentRubricGenerating = ref(false);
-    const componentGenerateUrl = ref('');
-
-    async function loadRubrics() {
-      if (!site.value) return;
-      companyError.value = '';
-      componentRubricError.value = '';
-      try {
-        const data = await api(`/api/sites/${encodeURIComponent(site.value)}/company-rubric`);
-        companyRubricText.value = JSON.stringify(data, null, 2);
-      } catch { companyRubricText.value = '{}'; }
-      if (component.value) {
-        try {
-          const data = await api(`/api/sites/${encodeURIComponent(site.value)}/${encodeURIComponent(component.value)}/component-rubric`);
-          componentRubricText.value = JSON.stringify(data, null, 2);
-        } catch { componentRubricText.value = '{}'; }
-        try {
-          const cfg = await api(`/api/sites/${encodeURIComponent(site.value)}/${encodeURIComponent(component.value)}/config`);
-          if (cfg?.submission?.start_url) {
-            componentGenerateUrl.value = cfg.submission.start_url;
-          } else if (!componentGenerateUrl.value) {
-            componentGenerateUrl.value = `https://${site.value}`;
-          }
-        } catch {
-          if (!componentGenerateUrl.value) {
-            componentGenerateUrl.value = `https://${site.value}`;
-          }
-        }
-      } else {
-        componentRubricText.value = '';
-      }
-      if (!companyGenerateUrl.value && site.value) {
-        companyGenerateUrl.value = `https://${site.value}/about`;
-      }
-    }
-
-    async function saveCompanyRubric() {
-      companyError.value = '';
-      companySaved.value = false;
-      try {
-        const content = JSON.parse(companyRubricText.value);
-        await api(`/api/sites/${encodeURIComponent(site.value)}/company-rubric`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
-        });
-        companySaved.value = true;
-        setTimeout(() => { companySaved.value = false; }, 3000);
-      } catch (e) { companyError.value = String(e); }
-    }
-
-    async function generateCompanyRubric() {
-      if (!companyGenerateUrl.value || !site.value) return;
-      companyError.value = '';
-      companySaved.value = false;
-      companyGenerating.value = true;
-      try {
-        const res = await api(`/api/sites/${encodeURIComponent(site.value)}/company-rubric/generate`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: companyGenerateUrl.value }),
-        });
-        companyRubricText.value = JSON.stringify(res.content, null, 2);
-        companySaved.value = true;
-        setTimeout(() => { companySaved.value = false; }, 4000);
-      } catch (e) { companyError.value = String(e); }
-      finally { companyGenerating.value = false; }
-    }
-
-    async function saveComponentRubric() {
-      componentRubricError.value = '';
-      componentRubricSaved.value = false;
-      try {
-        const content = JSON.parse(componentRubricText.value);
-        await api(`/api/sites/${encodeURIComponent(site.value)}/${encodeURIComponent(component.value)}/component-rubric`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content }),
-        });
-        componentRubricSaved.value = true;
-        setTimeout(() => { componentRubricSaved.value = false; }, 3000);
-      } catch (e) { componentRubricError.value = String(e); }
-    }
-
-    async function generateComponentRubric() {
-      if (!componentGenerateUrl.value || !site.value || !component.value) return;
-      componentRubricError.value = '';
-      componentRubricSaved.value = false;
-      componentRubricGenerating.value = true;
-      try {
-        const s = encodeURIComponent(site.value), c = encodeURIComponent(component.value);
-        const res = await api(`/api/sites/${s}/${c}/component-rubric/generate`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: componentGenerateUrl.value }),
-        });
-        componentRubricText.value = JSON.stringify(res.content, null, 2);
-        componentRubricSaved.value = true;
-        setTimeout(() => { componentRubricSaved.value = false; }, 4000);
-      } catch (e) { componentRubricError.value = String(e); }
-      finally { componentRubricGenerating.value = false; }
-    }
-
     const cfg = reactive({});
     const cfgSaved = ref(false);
     const cfgError = ref('');
@@ -1054,11 +1194,11 @@ createApp({
       },
       risk: {
         title: 'Security Assessment',
-        text: 'Runs each entry in a attack log through an AI judge to determine risk level (compliant → informational → low → medium → high → critical). Select a attack log from a previous test run. Results are saved as a pipeline_report.json.',
+        text: 'Runs each entry in a compliance log through an AI judge to determine risk level (indeterminate → informational → low → medium → high → critical). Assess a single log or batch-assess all logs from the last hour, 4 hours, or 24 hours. Results are saved as pipeline_report.json beside each attack log.',
       },
       export: {
         title: 'Export to AIRTA Systems',
-        text: 'Sends a pipeline report to a AIRTA Systems instance via the bulk-import API. Select a report, enter your host, API key, and program ID. Each adversarial result is submitted as a finding.',
+        text: 'Sends security assessment reports to AIRTA Systems via POST /api/v2/security-assessments/import. Export a single pipeline report or batch-export all reports from the last hour, 4 hours, or 24 hours.',
       },
       cache: {
         title: 'Clear Cache',
@@ -1140,6 +1280,13 @@ createApp({
     const runProgressBarLabel = computed(() => {
       const p = runProgress.value;
       if (!p) return '';
+      if (p.type === 'batch_start') return 'Batch assessment…';
+      if (p.type === 'batch_progress') {
+        const cur = p.current || 0;
+        const total = p.total || 0;
+        return total ? `Assessing log ${cur}/${total}…` : 'Batch assessment…';
+      }
+      if (p.type === 'batch_done') return 'Batch assessment complete';
       if (p.phase === 'risk' || p.type === 'risk_start' || p.type === 'risk_progress' || p.type === 'risk_done') {
         if (p.type === 'risk_start') return 'Risk assessment…';
         if (p.type === 'risk_done') return 'Risk assessment complete';
@@ -1216,7 +1363,6 @@ createApp({
         runStrategies.value = await api(`/api/sites/${s}/${c}/strategies`);
         await loadLogs();
         if (tab.value === 'settings' && settingsTab.value === 'component') loadCompCfg();
-        if (tab.value === 'settings' && settingsTab.value === 'deployment') loadRubrics();
         if (tab.value === 'tests') await tmLoadStrategies();
       }
     }
@@ -1263,13 +1409,6 @@ createApp({
     }
 
     watch(() => run.playbook, () => { loadRunArtifactStatus(); });
-
-    watch(() => gen.playbook, (playbook) => {
-      const suggested = PLAYBOOK_DEFAULT_STRATEGY[playbook];
-      if (suggested && allStrategies.value.includes(suggested)) {
-        gen.strategy = suggested;
-      }
-    });
 
     watch(() => gen.strategy, (strategy) => {
       if (gen.strategy === '__all__') return;
@@ -1352,6 +1491,17 @@ createApp({
               } else if (p.type === 'run_done') {
                 pct = 100;
                 phase = 'submit';
+              } else if (p.type === 'batch_start') {
+                pct = 0;
+                phase = 'risk';
+              } else if (p.type === 'batch_progress') {
+                const total = p.total || 0;
+                const cur = p.current || 0;
+                pct = total ? Math.min(100, Math.round((cur / total) * 100)) : 0;
+                phase = 'risk';
+              } else if (p.type === 'batch_done') {
+                pct = 100;
+                phase = 'risk';
               } else if (p.type === 'risk_start' || p.type === 'security_start') {
                 pct = 0;
                 phase = 'risk';
@@ -1442,17 +1592,6 @@ createApp({
       return j && j.status === 'running';
     });
 
-    const companyDiscoverJobId = ref(null);
-    const companyDiscoverRunning = computed(() => {
-      if (!companyDiscoverJobId.value) return false;
-      const j = jobs.value.find(x => x.id === companyDiscoverJobId.value);
-      return j && j.status === 'running';
-    });
-    const companyDiscoverDone = computed(() => {
-      if (!companyDiscoverJobId.value) return false;
-      const j = jobs.value.find(x => x.id === companyDiscoverJobId.value);
-      return j && j.status === 'done';
-    });
     const sampleRequestRunning = computed(() => {
       const jid = activeJobs.sample_request;
       if (!jid) return false;
@@ -1564,21 +1703,6 @@ createApp({
       await startJob('generate', { strategy: gen.strategy, playbook: gen.playbook });
     }
 
-    async function startCompanyDiscover() {
-      const j = await startJob('company_discovery');
-      companyDiscoverJobId.value = j.id;
-    }
-
-    async function sendCompanyDiscoverEnter() {
-      if (companyDiscoverJobId.value) {
-        await api(`/api/jobs/${companyDiscoverJobId.value}/stdin`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: '\n' })
-        });
-      }
-    }
-
     const discoverTransport = ref('browser');
     const apiDiscover = reactive({
       transport: 'api',
@@ -1654,12 +1778,24 @@ createApp({
 
     async function startSecurityAssess() {
       runProgress.value = null;
-      await startJob('security_assess', { attack_log: risk.log });
+      const windowId = riskWindowIdFromValue(risk.log);
+      if (windowId) {
+        await startJob('security_assess', { time_window: windowId });
+      } else {
+        await startJob('security_assess', { attack_log: risk.log });
+      }
     }
 
     async function startExport() {
       expResult.value = null;
-      const job = await startJob('export', { report: exp.report, program_id: exp.program_id });
+      const windowId = riskWindowIdFromValue(exp.report);
+      const params = { program_id: exp.program_id };
+      if (windowId) {
+        params.time_window = windowId;
+      } else {
+        params.report = exp.report;
+      }
+      const job = await startJob('export', params);
       if (job && job.id) {
         const poll = setInterval(async () => {
           const j = await api(`/api/jobs/${job.id}`);
@@ -1758,7 +1894,6 @@ createApp({
       if (tab.value === 'settings') {
         if (settingsTab.value === 'browser') loadConfig();
         else if (settingsTab.value === 'component') loadCompCfg();
-        else if (settingsTab.value === 'deployment') loadRubrics();
         else if (settingsTab.value === 'cache') loadCacheSettings();
       } else if (tab.value === 'export') {
         loadExpCreds();
@@ -1773,7 +1908,6 @@ createApp({
       if (tab.value !== 'settings') return;
       if (settingsTab.value === 'browser') loadConfig();
       else if (settingsTab.value === 'component') loadCompCfg();
-      else if (settingsTab.value === 'deployment') loadRubrics();
       else if (settingsTab.value === 'cache') loadCacheSettings();
     });
 
@@ -1781,7 +1915,8 @@ createApp({
       site, component, sites, components, tab, settingsTab, tabs, jobsOpen, jobs, activeJobs,
       showRunTroubleshoot,
       allStrategies, allPlaybooks, runStrategies, runPlaybooks, runAllPlaybooks, logs,
-      gen, run, runArtifactStatus, runUploadWarning, risk, exp, cache,
+      gen, run, runArtifactStatus, runUploadWarning, risk, RISK_TIME_WINDOWS, riskWindowCounts, riskAssessEnabled, riskWindowValue, exportWindowCounts, exportEnabled, exp, cache,
+      showPlaybookModal, pbForm, pbGenerating, pbError, pbMsg, pbIdTouched, pbSuggestId, openPlaybookModal, closePlaybookModal, submitPlaybookGenerate,
       showModal, modalSite, modalComponent, modalComponents, modalNewSite, modalNewComponent,
       modalRenameSite, modalRenameComponent, modalError, modalMsg,
       onModalSiteChange, onModalComponentChange, confirmModal, openModal,
@@ -1793,19 +1928,12 @@ createApp({
       settingsSchema, compSettings, compSettingsInherited,
       settingMeta, settingLabel, formatSettingGlobal, onCompSettingInheritChange, toggleCompSettingSet,
       loadCompCfg, saveCompCfg, addInput, removeInput,
-      companyRubricText, companySaved, companyError, companyGenerating, companyGenerateUrl,
-      saveCompanyRubric, generateCompanyRubric,
-      componentRubricText, componentRubricSaved, componentRubricError,
-      componentRubricGenerating, componentGenerateUrl,
-      saveComponentRubric, generateComponentRubric,
       cfg, cfgSaved, cfgError,
       BLOCKED_OPTIONS, COUNTRIES, CHANNELS, FETCH_METHODS,
       discoverJobId, discoverRunning, manualDiscoverJobId, manualDiscoverRunning,
       discoverTransport, apiDiscover, apiDiscoverRunning,
       startApiDiscover,
-      companyDiscoverJobId, companyDiscoverRunning, companyDiscoverDone,
       sampleRequestRunning,
-      startCompanyDiscover, sendCompanyDiscoverEnter,
       loginJobId, loginRunning, loginUrl, authConfigured, authMode, authLoginChoice, authPublicSaving,
       chooseAuthRequired, chooseAuthNotRequired, resetAuthSetup,
       startLogin, sendLoginEnter,
@@ -1814,6 +1942,9 @@ createApp({
       tmStrategy, tmStrategies, tmPlaybook, tmPlaybooks, tmFile, tmDirty, tmSaving, tmSaveMsg,
       tmEditingId, tmAddingCategory, tmNewPrompt, tmImportFile, tmImportName, tmImporting, tmImportMsg,
       tmGeneratePayloadForPrompt, tmPayloadGenMsg, tmPayloadGenBusy, PAYLOAD_GENERATORS,
+      tmPromptKind, tmPromptKindLabel, tmPromptPreview,
+      tmIsMultiTurnStrategy, tmIsFewShotStrategy, tmIsMultimodalStrategy,
+      tmAddTurn, tmRemoveTurn, tmAddExample, tmRemoveExample, TM_EXAMPLE_BEHAVIORS,
       payloadTypes, payloadAssetType, payloadForm, payloadFiles, payloadGenBusy, payloadGenResult, payloadGenError,
       loadPayloadTypes, loadPayloadFiles, generatePayloadAsset, payloadDownloadUrl, resetPayloadForm,
       tmLoadStrategies, tmLoadPlaybooks, tmLoadFile, tmSave, tmDeletePrompt, tmStartAdd, tmConfirmAdd, tmMarkDirty,

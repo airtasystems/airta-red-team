@@ -7,7 +7,6 @@ import os
 import re as _re
 import socket
 import sys
-import urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -35,9 +34,7 @@ from browser_bot.sites import (
     ensure_component_dir,
     ensure_site_dir,
     get_component_path,
-    get_component_rubric_path,
     get_domain_from_url,
-    get_site_company_rubric_path,
     list_components,
     list_sites,
     load_component_config,
@@ -207,142 +204,6 @@ async def api_save_component_config(site: str, component: str, body: SaveCompone
     return {"ok": True}
 
 
-class RubricBody(BaseModel):
-    content: dict
-
-
-def _global_company_rubric() -> Path | None:
-    p = _root / "playbooks" / "company.json"
-    return p if p.is_file() else None
-
-
-def _global_component_rubric() -> Path | None:
-    p = _root / "playbooks" / "component.json"
-    return p if p.is_file() else None
-
-
-@app.get("/api/sites/{site}/company-rubric")
-async def api_get_company_rubric(site: str):
-    """Return per-site company.json, falling back to global playbooks/company.json."""
-    p = get_site_company_rubric_path(site) or _global_company_rubric()
-    if not p:
-        return {}
-    return json.loads(p.read_text(encoding="utf-8"))
-
-
-@app.put("/api/sites/{site}/company-rubric")
-async def api_put_company_rubric(site: str, body: RubricBody):
-    """Save per-site company.json."""
-    ensure_site_dir(site)
-    p = _bb_dir / "sites" / site / "company.json"
-    p.write_text(json.dumps(body.content, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return {"ok": True, "path": str(p)}
-
-
-@app.get("/api/sites/{site}/{component}/component-rubric")
-async def api_get_component_rubric(site: str, component: str):
-    """Return per-component component.json, falling back to global playbooks/component.json."""
-    p = get_component_rubric_path(site, component) or _global_component_rubric()
-    if not p:
-        return {}
-    return json.loads(p.read_text(encoding="utf-8"))
-
-
-@app.put("/api/sites/{site}/{component}/component-rubric")
-async def api_put_component_rubric(site: str, component: str, body: RubricBody):
-    """Save per-component component.json."""
-    ensure_component_dir(site, component)
-    p = _bb_dir / "sites" / site / component / "component.json"
-    p.write_text(json.dumps(body.content, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return {"ok": True, "path": str(p)}
-
-
-def _fetch_url_html(url: str) -> str:
-    """Fetch a URL and return the response body as text (no browser, best-effort)."""
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        charset = "utf-8"
-        ct = resp.headers.get_content_charset()
-        if ct:
-            charset = ct
-        return resp.read().decode(charset, errors="replace")
-
-
-class GenerateRubricBody(BaseModel):
-    url: str
-
-
-@app.post("/api/sites/{site}/company-rubric/generate")
-async def api_generate_company_rubric(site: str, body: GenerateRubricBody):
-    """Fetch a URL, extract company context via Gemini, save & return company.json."""
-    try:
-        html = _fetch_url_html(body.url)
-    except Exception as exc:
-        raise HTTPException(400, f"Failed to fetch URL: {exc}")
-
-    bb_path = str(_bb_dir)
-    if bb_path not in sys.path:
-        sys.path.insert(0, bb_path)
-    try:
-        from browser_bot.rubric_discovery import generate_company_json
-    except ImportError as exc:
-        raise HTTPException(500, f"rubric_discovery module unavailable: {exc}")
-
-    result = generate_company_json(html, body.url)
-    if not result:
-        raise HTTPException(500, "LLM returned empty result")
-
-    ensure_site_dir(site)
-    p = _bb_dir / "sites" / site / "company.json"
-    p.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return {"ok": True, "content": result}
-
-
-@app.post("/api/sites/{site}/{component}/component-rubric/generate")
-async def api_generate_component_rubric(site: str, component: str, body: GenerateRubricBody):
-    """Fetch a URL, extract component context via Gemini (+ company.json context), save & return component.json."""
-    try:
-        html = _fetch_url_html(body.url)
-    except Exception as exc:
-        raise HTTPException(400, f"Failed to fetch URL: {exc}")
-
-    bb_path = str(_bb_dir)
-    if bb_path not in sys.path:
-        sys.path.insert(0, bb_path)
-    try:
-        from browser_bot.rubric_discovery import generate_component_json
-    except ImportError as exc:
-        raise HTTPException(500, f"rubric_discovery module unavailable: {exc}")
-
-    # Load company.json to ground the component rubric in real company context
-    company_data: dict | None = None
-    company_p = _bb_dir / "sites" / site / "company.json"
-    if company_p.is_file():
-        try:
-            company_data = json.loads(company_p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-
-    result = generate_component_json(html, body.url, component, company_data=company_data)
-    if not result:
-        raise HTTPException(500, "LLM returned empty result")
-
-    ensure_component_dir(site, component)
-    p = _bb_dir / "sites" / site / component / "component.json"
-    p.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return {"ok": True, "content": result}
-
-
 @app.get("/api/strategies")
 async def api_strategies():
     return STRATEGIES
@@ -431,7 +292,7 @@ def _security_playbook_stems() -> list[str]:
         return []
     out: list[str] = []
     for p in sorted(playbooks_dir.glob("*.json")):
-        if p.stem in ("company", "component"):
+        if p.stem in ("company", "component") or p.stem.startswith("_"):
             continue
         try:
             data = json.loads(p.read_text(encoding="utf-8-sig"))
@@ -446,6 +307,84 @@ def _security_playbook_stems() -> list[str]:
 @app.get("/api/playbooks")
 async def api_playbooks():
     return _security_playbook_stems()
+
+
+class GeneratePlaybookBody(BaseModel):
+    playbook_id: str
+    topic: str
+    name: str = ""
+    assessment_focus: str = ""
+    category_count: int = 8
+    overwrite: bool = False
+
+
+@app.get("/api/playbooks/template")
+async def api_playbook_template():
+    gen_dir = _root / "generate-tests"
+    if str(gen_dir) not in sys.path:
+        sys.path.insert(0, str(gen_dir))
+    from playbook_generator import load_template, template_path
+
+    try:
+        data = load_template()
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"path": str(template_path()), "template": data}
+
+
+@app.post("/api/playbooks/generate")
+async def api_generate_playbook(body: GeneratePlaybookBody):
+    gen_dir = _root / "generate-tests"
+    if str(gen_dir) not in sys.path:
+        sys.path.insert(0, str(gen_dir))
+    from playbook_generator import (
+        generate_playbook_json,
+        save_playbook,
+        slugify_playbook_id,
+        validate_playbook,
+    )
+
+    playbook_id = slugify_playbook_id(body.playbook_id)
+    if not playbook_id or playbook_id.startswith("_"):
+        raise HTTPException(400, "Invalid playbook_id")
+    topic = body.topic.strip()
+    if len(topic) < 10:
+        raise HTTPException(400, "topic must be at least 10 characters")
+    category_count = max(3, min(12, int(body.category_count or 8)))
+
+    try:
+        data = generate_playbook_json(
+            topic=topic,
+            playbook_id=playbook_id,
+            display_name=body.name.strip() or None,
+            category_count=category_count,
+            assessment_focus=body.assessment_focus.strip() or None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    errors = validate_playbook(data, playbook_id)
+    if errors:
+        raise HTTPException(422, "; ".join(errors[:8]))
+
+    dest = _root / "playbooks" / f"{playbook_id}.json"
+    if dest.exists() and not body.overwrite:
+        raise HTTPException(409, f"Playbook already exists: {playbook_id}")
+
+    try:
+        path = save_playbook(data, overwrite=body.overwrite)
+    except FileExistsError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    return {
+        "ok": True,
+        "playbook_id": playbook_id,
+        "playbook": data.get("playbook", playbook_id),
+        "path": str(path.relative_to(_root)),
+        "category_count": len(data.get("categories") or []),
+    }
 
 
 def _pretty(slug: str) -> str:
@@ -627,10 +566,13 @@ async def api_component_logs(site: str, component: str):
         list(logs_dir.glob("*/pipeline_report.json")) + list(logs_dir.glob("pipeline_report*.json")),
         key=lambda p: p.stat().st_mtime, reverse=True,
     )
+    def _entry(p: Path) -> dict:
+        return {"name": _label(p), "path": str(p), "mtime": p.stat().st_mtime}
+
     return {
-        "runs": [{"name": _label(p), "path": str(p)} for p in runs],
-        "attacks": [{"name": _label(p), "path": str(p)} for p in attacks],
-        "reports": [{"name": _label(p), "path": str(p)} for p in reports],
+        "runs": [_entry(p) for p in runs],
+        "attacks": [_entry(p) for p in attacks],
+        "reports": [_entry(p) for p in reports],
     }
 
 

@@ -134,10 +134,9 @@ def show_menu():
     print(f"  BROWSER BOT{ctx}")
     print("=" * 50)
     print("  1. Add login (open browser, log in, save auth)")
-    print("  2. Discover company context (generate company.json)")
-    print("  3. Create component config")
-    print("  4. Remove site config")
-    print("  5. Back")
+    print("  2. Create component config")
+    print("  3. Remove site config")
+    print("  4. Back")
     print("=" * 50)
 
 
@@ -182,15 +181,6 @@ def menu_run_post():
     import main
 
     asyncio.run(main.run_posts(site=current_site, component=current_component))
-
-
-def menu_discover_company():
-    """Open browser, navigate to About page, generate company.json via LLM."""
-    if not current_site:
-        print("\n  No site selected.")
-        return
-    from browser_bot.rubric_discovery import run_company_discovery
-    asyncio.run(run_company_discovery(current_site))
 
 
 def menu_create_component():
@@ -249,17 +239,15 @@ def main_loop():
     try:
         while True:
             show_menu()
-            choice = input("  Choice [1-5]: ").strip() or "5"
+            choice = input("  Choice [1-4]: ").strip() or "4"
 
             if choice == "1":
                 menu_add_login()
             elif choice == "2":
-                menu_discover_company()
-            elif choice == "3":
                 menu_create_component()
-            elif choice == "4":
+            elif choice == "3":
                 menu_remove_site()
-            elif choice == "5":
+            elif choice == "4":
                 print("\n  Back.")
                 break
             else:

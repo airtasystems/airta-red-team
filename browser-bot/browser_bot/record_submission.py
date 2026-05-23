@@ -1454,11 +1454,6 @@ def run_manual_training(site: str, component: str) -> bool:
                 _save_partial(site, component, submission)
                 print(f"    start_url: {page.url}")
 
-                full_html = await page.content()
-                from browser_bot.rubric_discovery import save_component_rubric_for_site
-
-                save_component_rubric_for_site(site, component, full_html, page.url)
-
                 inputs: list[dict] = []
 
                 print("  [2/7] Scanning page for file upload support...")
@@ -1573,9 +1568,6 @@ def run_manual_training(site: str, component: str) -> bool:
         print(f"    multimodal upload: {file_inputs[0].get('selector')}")
     print(f"    submit_selector:   {submission['submit_selector']}")
     print(f"    response_selector: {submission['response_selector']}")
-    comp_json = get_component_path(site, component) / "component.json"
-    if comp_json.is_file():
-        print(f"    component.json:    {comp_json}")
     print("═" * 50)
     return True
 
@@ -1672,10 +1664,6 @@ def run_training(site: str, component: str) -> bool:
 
     submission["start_url"] = page_url
     _save_partial(site, component, submission)
-
-    from browser_bot.rubric_discovery import save_component_rubric_for_site
-
-    save_component_rubric_for_site(site, component, full_html, page_url)
 
     # -----------------------------------------------------------------------
     # Step 2 — Detect file upload support from captured HTML

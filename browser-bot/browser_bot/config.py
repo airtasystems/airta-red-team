@@ -310,7 +310,7 @@ def _apply_ui_prompt_transform(text: str) -> str:
 # --- Fetch method selection ---
 # "auto" = try tiers in order (pool → cluster → human)
 # "pool" | "cluster" | "human" = use only that method
-FETCH_METHOD = 'pool'
+FETCH_METHOD = 'human'
 
 # --- Pool (Tier 1: Full speed) ---
 POOL_SIZE = 8
@@ -457,7 +457,7 @@ def get_human_context_opts():
 
 # --- Browser ---
 BLOCKED_TYPES = set()
-HEADLESS = True
+HEADLESS = False
 # System chromium-browser (Linux). Set to None to use Playwright's bundled Chromium.
 CHROMIUM_EXECUTABLE_PATH = '/usr/bin/chromium-browser'
 # Use real Chrome for human/login (Google trusts it more). Set to "chrome" if Chromium is blocked.

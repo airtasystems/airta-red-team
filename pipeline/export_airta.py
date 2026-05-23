@@ -1,8 +1,4 @@
-"""AIRTA Systems export entrypoint.
-
-Keeps the public import path stable while the implementation lives in
-``pipeline.export_genbounty``.
-"""
-from .export_genbounty import export_pipeline_report
+"""AIRTA Systems security assessment export entrypoint."""
+from .export_security import export_pipeline_report
 
 __all__ = ["export_pipeline_report"]

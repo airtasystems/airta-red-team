@@ -32,8 +32,8 @@ def get_playbooks() -> list[str]:
         return []
     names = []
     for p in sorted(playbooks_dir.glob("*.json")):
-        if p.stem in ("company", "component"):
-            continue  # context rubrics for judge/adapter, not compliance frameworks
+        if p.stem in ("company", "component") or p.stem.startswith("_"):
+            continue  # context rubrics / reference templates, not attack playbooks
         try:
             data = json.loads(p.read_text(encoding="utf-8-sig"))
             if data.get("deprecated"):
