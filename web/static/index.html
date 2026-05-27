@@ -278,8 +278,8 @@
           </div>
           <div class="form-row">
             <label>Playbook</label>
-            <div class="manage-inline" style="flex:1;max-width:none;">
-              <select v-model="gen.playbook" style="flex:1;max-width:none;">
+            <div class="manage-inline">
+              <select v-model="gen.playbook">
                 <option v-for="f in allPlaybooks" :key="f" :value="f">{{ pretty(f) }}</option>
               </select>
               <button type="button" class="btn btn-ghost btn-sm" @click="openPlaybookModal">+ New playbook</button>
