@@ -12,7 +12,8 @@ playwright-stealth
 python-dotenv
 pyyaml
 
-# Web UI
+# Web UI (starlette>=1.0.1 fixes CVE-2026-48710 / BadHost)
+starlette>=1.0.1
 fastapi
 uvicorn
 pydantic
