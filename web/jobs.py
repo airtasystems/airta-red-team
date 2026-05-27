@@ -607,9 +607,14 @@ async def _start_generate(job: Job):
 
 async def _start_login(job: Job):
     worker = _root / "web" / "login_worker.py"
-    url = job.params.get("url", "")
+    bb_dir = _root / "browser-bot"
+    if str(bb_dir) not in sys.path:
+        sys.path.insert(0, str(bb_dir))
+    from browser_bot.sites import validate_login_url
+
+    url = validate_login_url(job.params.get("url", ""))
     if not url:
-        job.output.append("[!] No URL provided for login")
+        job.output.append("[!] No valid login URL provided (expected http(s) URL with host)")
         job.status = "failed"
         job._event.set()
         return

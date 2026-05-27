@@ -1272,6 +1272,7 @@ createApp({
     const runPreviewModalLabel = ref('');
     const showRunLoginModal = ref(false);
     const showRunRateLimitModal = ref(false);
+    const showRunChallengeModal = ref(false);
     const runRateLimitBackoffSec = ref(60);
     const rateLimitCountdown = ref(0);
     const rateLimitWaiting = ref(false);
@@ -1280,6 +1281,8 @@ createApp({
     const runLoginUrl = ref('');
     const runBlockedInfo = ref(null);
     const pendingRunAfterLogin = ref(false);
+    const pendingRunAfterChallenge = ref(false);
+    const runChallengeAdvice = ref([]);
     const authSaving = ref(false);
     const authSaveError = ref('');
 
@@ -1394,7 +1397,7 @@ createApp({
 
     function lineClass(line) {
       const t = line.trimStart();
-      if (t.startsWith('[evasion]')) return 'line-evasion';
+      if (t.startsWith('[resilience]') || t.startsWith('[evasion]')) return 'line-resilience';
       if (line.startsWith('[+]') || line.startsWith('[*]')) return 'line-ok';
       if (line.startsWith('[!]') || line.startsWith('[-]') || line.startsWith('[error]')) return 'line-err';
       if (line.startsWith('  ')) return 'line-info';
@@ -1549,6 +1552,15 @@ createApp({
                   runRateLimitBackoffSec.value = Math.max(1, Math.round(Number(p.backoff_sec) || 60));
                   tab.value = 'run';
                   showRunRateLimitModal.value = true;
+                } else if (
+                  p.kind === 'captcha'
+                  || p.action === 'prompt_challenge'
+                  || p.action === 'manual'
+                ) {
+                  pendingRunAfterChallenge.value = true;
+                  runChallengeAdvice.value = Array.isArray(p.advice) ? p.advice : [];
+                  tab.value = 'run';
+                  showRunChallengeModal.value = true;
                 }
                 runProgress.value = { ...p, pct: runProgress.value?.pct ?? 0, phase: 'blocked' };
               } else {
@@ -1765,8 +1777,15 @@ createApp({
       await checkSetupAndNavigate();
     }
 
+    function coerceLoginUrl(url) {
+      if (typeof url === 'string' && url.trim()) return url.trim();
+      if (loginUrl.value && String(loginUrl.value).trim()) return String(loginUrl.value).trim();
+      return '';
+    }
+
     async function startLogin(url) {
-      const targetUrl = url || loginUrl.value;
+      const targetUrl = coerceLoginUrl(url);
+      if (!targetUrl) return;
       const j = await startJob('login', { url: targetUrl });
       loginJobId.value = j.id;
     }
@@ -1782,7 +1801,7 @@ createApp({
 
     async function confirmRunLogin() {
       authSaveError.value = '';
-      const url = runLoginUrl.value || loginUrl.value;
+      const url = coerceLoginUrl(runLoginUrl.value || loginUrl.value);
       if (!url) return;
       loginUrl.value = url;
       await prepareAuthForLoginCapture();
@@ -1827,6 +1846,19 @@ createApp({
       showRunRateLimitModal.value = false;
     }
 
+    function dismissRunChallengeModal() {
+      showRunChallengeModal.value = false;
+    }
+
+    async function confirmChallengeResume() {
+      showRunChallengeModal.value = false;
+      runBlockedInfo.value = null;
+      runChallengeAdvice.value = [];
+      const shouldResume = pendingRunAfterChallenge.value;
+      pendingRunAfterChallenge.value = false;
+      if (shouldResume) await startRunTests();
+    }
+
     function _clearRateLimitTimer() {
       if (rateLimitTimer) {
         clearInterval(rateLimitTimer);
@@ -1861,6 +1893,13 @@ createApp({
       }
       if (runBlockedInfo.value?.kind === 'rate_limited') {
         showRunRateLimitModal.value = true;
+        return;
+      }
+      if (
+        runBlockedInfo.value?.kind === 'captcha'
+        || runBlockedInfo.value?.action === 'prompt_challenge'
+      ) {
+        showRunChallengeModal.value = true;
         return;
       }
       showRunTroubleshoot.value = true;
@@ -1948,8 +1987,11 @@ createApp({
       runBlockedInfo.value = null;
       showRunLoginModal.value = false;
       showRunRateLimitModal.value = false;
+      showRunChallengeModal.value = false;
       pendingRunAfterLogin.value = false;
       pendingRunAfterRateLimit.value = false;
+      pendingRunAfterChallenge.value = false;
+      runChallengeAdvice.value = [];
       runLoginUrl.value = '';
       authSaveError.value = '';
       rateLimitWaiting.value = false;
@@ -2106,7 +2148,8 @@ createApp({
       showRunTroubleshoot,
       showRunLoginModal, runLoginUrl, runBlockedInfo, pendingRunAfterLogin, authSaving, authSaveError,
       showRunRateLimitModal, runRateLimitBackoffSec, rateLimitCountdown, rateLimitWaiting, pendingRunAfterRateLimit,
-      confirmRateLimitResume, dismissRunRateLimitModal,
+      showRunChallengeModal, runChallengeAdvice, pendingRunAfterChallenge,
+      confirmRateLimitResume, dismissRunRateLimitModal, confirmChallengeResume, dismissRunChallengeModal,
       runPreviews, hasRunPreviews, runPreviewLayoutClass, showRunPreviewModal, runPreviewModalUrl, runPreviewModalLabel,
       openRunPreviewModal, closeRunPreviewModal,
       confirmRunLogin, saveAuth, dismissRunLoginModal, onRunTroubleshoot,

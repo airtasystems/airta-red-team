@@ -314,6 +314,11 @@ async def run_posts(site: str | None = None, component: str | None = None, *, mo
     suite_path: optional Path to the suite JSON to read prompts from directly, bypassing
     the posts/ staging directory.
     """
+    if site and component:
+        from browser_bot.config import apply_component_settings
+
+        apply_component_settings(site, component)
+
     # UI mode: component has submission config
     if site and component:
         sub = get_submission_config(site, component)

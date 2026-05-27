@@ -50,6 +50,28 @@ CAPTCHA_HINTS = (
     "security check",
 )
 
+CLOUDFLARE_HINTS = (
+    "just a moment",
+    "checking your browser",
+    "checking if the site connection is secure",
+    "cf-browser-verification",
+    "needs to review the security of your connection",
+    "turnstile",
+    "cloudflare",
+)
+
+CLOUDFLARE_SELECTORS = (
+    'iframe[src*="challenges.cloudflare"]',
+    'iframe[src*="turnstile"]',
+    '#cf-turnstile',
+    '[class*="cf-turnstile"]',
+    'input[name="cf-turnstile-response"]',
+    '[id*="turnstile"]',
+)
+
+DEFAULT_CHALLENGE_POLL_SEC = 5.0
+DEFAULT_CHALLENGE_MAX_WAIT_SEC = 120.0
+
 RATE_LIMIT_BODY_PHRASES = (
     "too many requests",
     "rate limit",
@@ -231,11 +253,6 @@ async def _resolve_rate_limit(
             "rate_limit_backoff",
             sleep_s=backoff_sec,
             detail=f"Rate limit visible; waiting before reload ({attempt}/{max_auto_retries})",
-        )
-        print(
-            f"[*] Rate limit detected — backing off {backoff_sec:.0f}s "
-            f"(attempt {attempt}/{max_auto_retries})…",
-            flush=True,
         )
         await asyncio.sleep(backoff_sec)
         try:
@@ -474,7 +491,25 @@ async def check_submission_readiness(
     return warnings
 
 
+async def _detect_cloudflare_turnstile(page: "Page") -> bool:
+    try:
+        body = (await page.inner_text("body")).lower()
+    except Exception:
+        body = ""
+    if any(hint in body for hint in CLOUDFLARE_HINTS):
+        return True
+    for frame_sel in CLOUDFLARE_SELECTORS:
+        try:
+            if await page.locator(frame_sel).count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 async def _detect_captcha(page: "Page") -> bool:
+    if await _detect_cloudflare_turnstile(page):
+        return True
     try:
         body = (await page.inner_text("body")).lower()
     except Exception:
@@ -488,6 +523,79 @@ async def _detect_captcha(page: "Page") -> bool:
         except Exception:
             continue
     return False
+
+
+def _emit_blocked_challenge(site: str) -> None:
+    from browser_bot.submit.common import log_airta_progress
+
+    advice = [
+        "Complete the security challenge in the browser window.",
+        "Use headed human fetch mode (HEADLESS: false, FETCH_METHOD: human) if the challenge does not appear headless.",
+        "Click Resume tests after the challenge clears.",
+    ]
+    log_airta_progress(
+        {
+            "type": "blocked",
+            "kind": "captcha",
+            "message": "Security challenge detected (Cloudflare/Turnstile or CAPTCHA).",
+            "action": "prompt_challenge",
+            "site": site,
+            "advice": advice,
+        }
+    )
+
+
+async def _resolve_cloudflare_challenge(
+    page: "Page",
+    *,
+    site: str,
+    component: str,
+) -> None:
+    if not await _detect_cloudflare_turnstile(page):
+        return
+
+    config = load_component_config(site, component)
+    sub = config.get("submission") if isinstance(config.get("submission"), dict) else {}
+    challenge = sub.get("challenge") if isinstance(sub.get("challenge"), dict) else {}
+    settings = config.get("settings") if isinstance(config.get("settings"), dict) else {}
+
+    poll_raw = challenge.get("poll_sec", settings.get("CHALLENGE_POLL_SEC", DEFAULT_CHALLENGE_POLL_SEC))
+    max_wait_raw = challenge.get("max_wait_sec", settings.get("CHALLENGE_MAX_WAIT_SEC", DEFAULT_CHALLENGE_MAX_WAIT_SEC))
+    try:
+        poll_sec = max(1.0, float(poll_raw))
+    except (TypeError, ValueError):
+        poll_sec = DEFAULT_CHALLENGE_POLL_SEC
+    try:
+        max_wait_sec = max(poll_sec, float(max_wait_raw))
+    except (TypeError, ValueError):
+        max_wait_sec = DEFAULT_CHALLENGE_MAX_WAIT_SEC
+
+    elapsed = 0.0
+    attempt = 0
+    from browser_bot.submit.common import log_evasion
+
+    while elapsed < max_wait_sec:
+        attempt += 1
+        log_evasion(
+            "cloudflare_wait",
+            sleep_s=poll_sec,
+            detail=f"Security challenge visible; waiting ({attempt}, {int(elapsed)}s/{int(max_wait_sec)}s)",
+        )
+        await asyncio.sleep(poll_sec)
+        elapsed += poll_sec
+        if not await _detect_cloudflare_turnstile(page):
+            print("[+] Security challenge cleared.", flush=True)
+            return
+
+    _emit_blocked_challenge(site)
+    raise PageBlockedError(
+        "captcha",
+        advice=[
+            "Complete the security challenge in the browser, then resume tests.",
+            "Switch to headed human fetch mode if the challenge is not visible headless.",
+        ],
+        message="Security challenge detected.",
+    )
 
 
 async def detect_heuristic_blockers(
@@ -506,22 +614,13 @@ async def detect_heuristic_blockers(
     if await _rate_limit_visible(page, blockers):
         await _resolve_rate_limit(page, site=site, component=component, blockers=blockers)
 
-    if await _detect_captcha(page):
-        from browser_bot.submit.common import log_airta_progress
+    await _resolve_cloudflare_challenge(page, site=site, component=component)
 
-        log_airta_progress(
-            {
-                "type": "blocked",
-                "kind": "captcha",
-                "message": "CAPTCHA or security check detected.",
-                "action": "manual",
-                "site": site,
-                "advice": ["Complete the CAPTCHA in the browser, then retry Run Tests."],
-            }
-        )
+    if await _detect_captcha(page):
+        _emit_blocked_challenge(site)
         raise PageBlockedError(
             "captcha",
-            advice=["Complete the CAPTCHA manually, then retry."],
+            advice=["Complete the CAPTCHA manually, then resume tests."],
             message="CAPTCHA detected.",
         )
 
@@ -541,6 +640,7 @@ async def ensure_page_ready_for_submit(
     await _attempt_cookie_self_heal(page, site=site, component=component, blockers=blockers)
     await _resolve_login_wall(page, site=site, component=component, start_url=start_url)
     await _resolve_rate_limit(page, site=site, component=component, blockers=blockers)
+    await _resolve_cloudflare_challenge(page, site=site, component=component)
 
     warnings = await check_submission_readiness(page, inputs, submit_selector=submit_selector)
     for w in warnings:

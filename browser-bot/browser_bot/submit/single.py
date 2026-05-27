@@ -216,6 +216,10 @@ async def run_ui_submission_single(
 
         async def _retry_fast_then_human(text: str, tc: dict | None = None):
             for fetcher in parallel_fetchers[1:]:
+                log_evasion(
+                    "fetcher_fallback",
+                    detail=f"Retrying with {type(fetcher).__name__}",
+                )
                 try:
                     retry_result = await _run_one(text, fetcher, tc=tc)
                 except PageBlockedError:
@@ -224,6 +228,7 @@ async def run_ui_submission_single(
                     retry_result = None
                 if retry_result and retry_result[1]:
                     return retry_result
+            log_evasion("fetcher_fallback", detail="Retrying with human fetcher")
             return await _run_one_with_human(text, tc)
 
         for text, tc, r in zip(posts, case_list, parallel_results):
@@ -252,7 +257,10 @@ async def run_ui_submission_single(
                 )
                 await asyncio.sleep(EVASION_REQUEST_DELAY_S)
             result = None
-            for fetcher, human_behavior in fetchers_to_try:
+            for idx, (fetcher, human_behavior) in enumerate(fetchers_to_try):
+                if idx > 0:
+                    tier = "human" if human_behavior else type(fetcher).__name__
+                    log_evasion("fetcher_fallback", detail=f"Retrying with {tier}")
                 async def _cb(page, t=text, hb=human_behavior, case=tc):
                     return await do_ui_submit_with_page(
                         page,

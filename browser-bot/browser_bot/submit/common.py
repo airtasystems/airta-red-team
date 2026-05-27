@@ -16,14 +16,14 @@ from browser_bot.sites import ensure_component_dir, get_component_path
 
 
 def log_evasion(reason: str, *, sleep_s: float | None = None, detail: str = "") -> None:
-    """Emit a line for web UI / logs when an evasion delay or retry is applied."""
+    """Emit a line for web UI / logs when a resilience delay or retry is applied."""
     parts = [f"reason={reason}"]
     if sleep_s is not None:
         parts.append(f"sleep_s={sleep_s}")
     tail = " | ".join(parts)
     if detail:
         tail = f"{tail} | {detail}"
-    print(f"[evasion] {tail}", flush=True)
+    print(f"[resilience] {tail}", flush=True)
 
 
 def log_airta_progress(payload: dict) -> None:
@@ -180,7 +180,10 @@ async def run_with_evasion_retry(
             with attempt:
                 return await coro_fn()
     except tenacity.RetryError:
-        pass
+        log_evasion(
+            "http_retry_exhausted",
+            detail=f"All {EVASION_MAX_RETRIES} retries exhausted after non-2xx responses",
+        )
     return None
 
 

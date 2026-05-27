@@ -37,6 +37,19 @@ def get_domain_from_url(url: str) -> str:
     return parsed.netloc or parsed.path.split("/")[0] or ""
 
 
+def validate_login_url(url: object) -> str | None:
+    """Return a stripped http(s) URL string, or None if invalid."""
+    if not isinstance(url, str):
+        return None
+    candidate = url.strip()
+    if not candidate:
+        return None
+    parsed = urlparse(candidate)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return candidate
+
+
 def get_storage_state_path(domain: str) -> Path | None:
     """Get path to auth config for domain. Prefers auth.json, falls back to storage_state.json."""
     site_dir = _domain_to_site_dir(domain)

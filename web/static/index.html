@@ -218,6 +218,25 @@
     </div>
   </div>
 
+  <!-- Run security challenge modal -->
+  <div v-if="showRunChallengeModal" class="modal-backdrop" @click.self="dismissRunChallengeModal">
+    <div class="modal modal-wide">
+      <div class="modal-sub">Security challenge detected</div>
+      <div class="modal-help">
+        <p>Tests paused — <strong>{{ site }}</strong> is showing a Cloudflare, Turnstile, or CAPTCHA challenge.</p>
+        <p>Complete the challenge in the browser preview window, then click <strong>Resume tests</strong>.</p>
+        <ul v-if="runChallengeAdvice.length">
+          <li v-for="(tip, i) in runChallengeAdvice" :key="i">{{ tip }}</li>
+        </ul>
+        <p v-else>Use headed human fetch mode if the challenge does not appear in a headless browser.</p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" @click="dismissRunChallengeModal">Cancel</button>
+        <button type="button" class="btn btn-primary" @click="confirmChallengeResume">Resume tests</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Run troubleshooting modal -->
   <div v-if="showRunTroubleshoot" class="modal-backdrop" @click.self="showRunTroubleshoot = false">
     <div class="modal modal-wide">
@@ -399,7 +418,7 @@
                       style="flex:1;background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;color:var(--text);font-size:13px;">
                   </div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    <button type="button" class="btn btn-primary" @click="startLogin" :disabled="!site || !loginUrl || loginRunning">Start Login</button>
+                    <button type="button" class="btn btn-primary" @click="startLogin()" :disabled="!site || !loginUrl || loginRunning">Start Login</button>
                     <button type="button" class="btn btn-ghost" @click="sendLoginEnter" :disabled="!loginJobId || !loginRunning">Press Enter (done)</button>
                     <button type="button" class="btn btn-ghost btn-sm" @click="authLoginChoice = null">Back</button>
                   </div>

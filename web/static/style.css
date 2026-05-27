@@ -304,6 +304,7 @@ select { cursor: pointer; }
 .console .line-ok { color: var(--green); }
 .console .line-err { color: var(--red); }
 .console .line-info { color: var(--accent-glow); }
+.console .line-resilience,
 .console .line-evasion { color: var(--orange); font-size: 12px; }
 
 .run-progress-wrap {

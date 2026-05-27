@@ -79,15 +79,6 @@ python main.py run generate-tests/multimodal/owasp-llm.json --site 127.0.0.1:500
 
 `attack_log.json` includes `vector_type` and `artifact_path` for indirect-injection assessment.
 
-## Smoke tests (offline)
-
-```bash
-pip install pytest
-pytest tests/test_smoke.py -q
-```
-
-No API key required for these tests (convert log, payloads, playbook discovery).
-
 ## CLI examples
 
 ```bash

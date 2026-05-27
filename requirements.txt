@@ -35,6 +35,3 @@ numpy
 scipy
 pydub
 Faker
-
-# Dev / smoke tests
-pytest

@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright
 from browser_bot.auth_state import get_auth_config_path, save_auth_config
 from browser_bot.browser.launcher import launch_persistent_context_for_login
 from browser_bot.config import LOCALSTORAGE_MAX_VALUE_LEN, LOGIN_USE_PERSISTENT_CONTEXT
-from browser_bot.sites import get_domain_from_url, ensure_site_dir, get_login_profile_path
+from browser_bot.sites import ensure_site_dir, get_domain_from_url, get_login_profile_path, validate_login_url
 
 
 def _filter_storage_items(items: list, max_len: int) -> list:
@@ -62,8 +62,14 @@ async def capture_login(login_url: str, *, force_persistent: bool = False) -> st
     Returns domain on success.
     force_persistent=True forces persistent profile login flow even if config disables it.
     """
+    login_url = validate_login_url(login_url)
+    if not login_url:
+        print("[!] Invalid login URL: must be a non-empty http(s) URL with a host.", flush=True)
+        return None
+
     domain = get_domain_from_url(login_url)
     if not domain:
+        print("[!] Could not extract domain from login URL.", flush=True)
         return None
 
     ensure_site_dir(domain)
