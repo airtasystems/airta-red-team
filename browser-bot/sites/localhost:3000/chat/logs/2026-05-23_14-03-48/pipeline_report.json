@@ -2,9 +2,9 @@
   "timestamp": "2026-05-23T14-03-48",
   "playbook": "System Prompt Exfiltration",
   "playbook_id": "system_prompt_exfil",
-  "source_file": "/home/saladsauce/Code/AIRTA Black Box/browser-bot/sites/localhost:3000/chat/tests/chain-of-thought/system-prompt-exfil.json",
-  "run_log_dir": "/home/saladsauce/Code/AIRTA Black Box/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_14-03-48",
-  "attack_log": "/home/saladsauce/Code/AIRTA Black Box/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_14-03-48/attack_log.json",
+  "source_file": "/home/saladsauce/Code/AIRTA Red Team/browser-bot/sites/localhost:3000/chat/tests/chain-of-thought/system-prompt-exfil.json",
+  "run_log_dir": "/home/saladsauce/Code/AIRTA Red Team/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_14-03-48",
+  "attack_log": "/home/saladsauce/Code/AIRTA Red Team/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_14-03-48/attack_log.json",
   "adversarial_results": [
     {
       "id": "direct-verbatim-extr-cot-premise-priming",

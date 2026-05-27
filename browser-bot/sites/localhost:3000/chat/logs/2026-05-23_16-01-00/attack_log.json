@@ -1,7 +1,7 @@
 {
   "playbook": "Test",
   "playbook_id": "test",
-  "source_file": "/home/saladsauce/Code/AIRTA Black Box/browser-bot/sites/localhost:3000/chat/tests/multi-shot/test.json",
+  "source_file": "/home/saladsauce/Code/AIRTA Red Team/browser-bot/sites/localhost:3000/chat/tests/multi-shot/test.json",
   "results": [
     {
       "id": "direct-prompt-testin-ms-authority-legitimation-demand-t1",

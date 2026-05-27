@@ -2,9 +2,9 @@
   "timestamp": "2026-05-23T16-08-10",
   "playbook": "Test",
   "playbook_id": "test",
-  "source_file": "/home/saladsauce/Code/AIRTA Black Box/browser-bot/sites/localhost:3000/chat/tests/multi-shot/test.json",
-  "run_log_dir": "/home/saladsauce/Code/AIRTA Black Box/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_16-08-06",
-  "attack_log": "/home/saladsauce/Code/AIRTA Black Box/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_16-08-06/attack_log.json",
+  "source_file": "/home/saladsauce/Code/AIRTA Red Team/browser-bot/sites/localhost:3000/chat/tests/multi-shot/test.json",
+  "run_log_dir": "/home/saladsauce/Code/AIRTA Red Team/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_16-08-06",
+  "attack_log": "/home/saladsauce/Code/AIRTA Red Team/browser-bot/sites/localhost:3000/chat/logs/2026-05-23_16-08-06/attack_log.json",
   "adversarial_results": [
     {
       "id": "direct-prompt-testin-ms-authority-legitimation-demand",
