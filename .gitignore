@@ -28,6 +28,12 @@ reports/
 # Generated multimodal payloads
 payloads/generate/
 
+# browser-bot: profiles and session data (never commit)
+browser-bot/browser_profile/
+**/.login_profile/
+**/auth.json
+**/storage_state.json
+
 # component discovery
 # Per-site state (site_config/) and per-component state (localhost3000/<component>/)
 **/site_config/
