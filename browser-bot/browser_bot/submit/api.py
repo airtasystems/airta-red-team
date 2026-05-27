@@ -15,7 +15,12 @@ from browser_bot.config import (
 from browser_bot.sites import get_submission_config
 
 from browser_bot.submit.api_helpers import do_api_request
-from browser_bot.submit.common import SubmissionProgressTracker, _write_run_log, log_evasion
+from browser_bot.submit.common import (
+    SubmissionProgressTracker,
+    _write_run_log,
+    append_test_prompt_delimiter,
+    log_evasion,
+)
 
 
 async def _api_request_one(
@@ -29,7 +34,7 @@ async def _api_request_one(
     status, response_text, err = await asyncio.to_thread(
         do_api_request,
         sub,
-        text,
+        append_test_prompt_delimiter(text),
         site=site,
         test_case=test_case,
         suite_path=suite_path,

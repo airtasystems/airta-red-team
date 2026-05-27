@@ -690,6 +690,17 @@ async def api_stream_job(job_id: str):
     return StreamingResponse(stream_job(job_id), media_type="text/event-stream")
 
 
+@app.get("/api/jobs/{job_id}/preview")
+@app.get("/api/jobs/{job_id}/preview/{slot}")
+async def api_job_preview(job_id: str, slot: int = 0):
+    from browser_bot.live_preview import preview_path
+
+    path = preview_path(job_id, slot)
+    if not path.is_file():
+        raise HTTPException(404, "Preview not found")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 class StdinBody(BaseModel):
     text: str = "\n"
 

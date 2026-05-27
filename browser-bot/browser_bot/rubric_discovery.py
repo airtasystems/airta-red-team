@@ -655,7 +655,7 @@ async def run_company_discovery(site: str, overwrite: bool = False) -> bool:
     async def _run_persistent(p) -> bool:
         print("  Using persistent login profile for session restoration.")
         browser, context = await launch_persistent_context(
-            p, str(profile_path), headless=False
+            p, str(profile_path), headless=False, site=site
         )
         page = await context.new_page()
         try:

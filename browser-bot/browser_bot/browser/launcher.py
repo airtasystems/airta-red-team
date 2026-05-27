@@ -18,7 +18,6 @@ from browser_bot.config import (
     HUMAN_CHROME_ARGS,
     HUMAN_USER_AGENT,
     LOCALSTORAGE_MAX_VALUE_LEN,
-    LOGIN_USE_PERSISTENT_CONTEXT,
     get_discovery_context_opts,
     get_human_context_opts,
 )
@@ -94,6 +93,137 @@ def _storage_state_from_auth(config: dict) -> dict:
             for o in config.get("origins", [])
         ],
     }
+
+
+def _load_normalized_auth_config(path: Path) -> dict | None:
+    """Load and normalize auth.json or legacy storage_state.json."""
+    raw = _load_auth_config(path)
+    if not raw:
+        return None
+    if path.name == "auth.json":
+        return _normalize_auth_config(raw)
+    if isinstance(raw, dict) and ("cookies" in raw or "origins" in raw):
+        return raw
+    return _normalize_auth_config(raw)
+
+
+def load_auth_config_for_site(site: str) -> dict | None:
+    """Load normalized auth config for a site domain, or None if missing/empty."""
+    from browser_bot.sites import get_storage_state_path
+
+    path = get_storage_state_path(site)
+    if not path or not path.exists():
+        return None
+    config = _load_normalized_auth_config(path)
+    if not config:
+        return None
+    if config.get("auth_mode") == "none" and not _auth_config_has_session_data(config):
+        return None
+    return config
+
+
+def _auth_config_has_session_data(config: dict) -> bool:
+    if config.get("cookies"):
+        return True
+    if config.get("headers"):
+        return True
+    for origin in config.get("origins", []):
+        if origin.get("localStorage") or origin.get("sessionStorage"):
+            return True
+    return False
+
+
+async def apply_auth_config_to_context(
+    context,
+    config: dict,
+    *,
+    include_cookies: bool = True,
+    include_session_script: bool = True,
+    include_headers: bool = True,
+) -> None:
+    """Apply auth.json session data to a browser context (ephemeral or persistent)."""
+    if include_cookies:
+        cookies = config.get("cookies") or []
+        if cookies:
+            await context.add_cookies(cookies)
+
+    if include_session_script:
+        session_by_origin: dict[str, list] = {}
+        for origin in config.get("origins", []):
+            origin_url = origin.get("origin") or ""
+            if origin.get("sessionStorage") and origin_url:
+                session_by_origin[origin_url] = _filter_storage_items(
+                    origin["sessionStorage"], LOCALSTORAGE_MAX_VALUE_LEN
+                )
+        if session_by_origin:
+            script = f"""
+                (function() {{
+                    const data = {json.dumps(session_by_origin)};
+                    const origin = location.origin;
+                    if (data[origin]) {{
+                        data[origin].forEach(item => sessionStorage.setItem(item.name, item.value));
+                    }}
+                }})();
+            """
+            await context.add_init_script(script)
+
+    if include_headers:
+        headers = {
+            k: v for k, v in (config.get("headers") or {}).items() if k.lower() != "authorization"
+        }
+        if headers:
+            await context.set_extra_http_headers(headers)
+
+
+async def seed_auth_local_storage(context, config: dict, page=None) -> None:
+    """Visit each auth origin and restore localStorage (required for some SPAs e.g. Visme)."""
+    items_by_origin = {
+        o["origin"]: _filter_storage_items(o.get("localStorage", []), LOCALSTORAGE_MAX_VALUE_LEN)
+        for o in config.get("origins", [])
+        if o.get("origin") and o.get("localStorage")
+    }
+    items_by_origin = {k: v for k, v in items_by_origin.items() if v}
+    if not items_by_origin:
+        return
+
+    owns_page = page is None
+    if owns_page:
+        page = await context.new_page()
+
+    try:
+        for origin, items in items_by_origin.items():
+            loaded = False
+            for url in (origin, origin.rstrip("/") + "/"):
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    loaded = True
+                    break
+                except Exception:
+                    continue
+            if not loaded:
+                continue
+            try:
+                await page.evaluate(
+                    """(entries) => {
+                        entries.forEach(({ name, value }) => localStorage.setItem(name, value));
+                    }""",
+                    items,
+                )
+            except Exception:
+                pass
+    finally:
+        if owns_page and page is not None:
+            await page.close()
+
+
+async def apply_site_auth_to_context(context, site: str, *, page=None) -> bool:
+    """Merge auth.json into any context. Returns True when auth was applied."""
+    config = load_auth_config_for_site(site)
+    if not config:
+        return False
+    await apply_auth_config_to_context(context, config)
+    await seed_auth_local_storage(context, config, page=page)
+    return True
 
 
 async def launch_browser(playwright, human_mode: bool = False, headless: bool | None = None):
@@ -188,11 +318,14 @@ def _clear_stale_profile_locks(user_data_dir: str) -> None:
 
 
 async def launch_persistent_context(
-    playwright, user_data_dir: str, *, headless: bool = False
+    playwright, user_data_dir: str, *, headless: bool = False, site: str | None = None
 ) -> tuple[None, "BrowserContext"]:
     """
     Launch Chrome with persistent profile for login. Google trusts real profiles more.
     Returns (None, context). Caller closes context only (no separate browser).
+
+    When site is provided, auth.json is merged into the profile (cookies, sessionStorage,
+    headers, and localStorage seeded via origin visits).
     """
     from playwright.async_api import BrowserContext
 
@@ -241,12 +374,19 @@ async def launch_persistent_context(
     stealth = Stealth(**stealth_opts)
     await stealth.apply_stealth_async(context)
 
+    if site:
+        await apply_site_auth_to_context(context, site)
+
     return None, context
 
 
-async def launch_persistent_context_for_login(playwright, user_data_dir: str) -> tuple[None, "BrowserContext"]:
+async def launch_persistent_context_for_login(
+    playwright, user_data_dir: str, *, site: str | None = None
+) -> tuple[None, "BrowserContext"]:
     """Backward-compatible login wrapper using a visible persistent context."""
-    return await launch_persistent_context(playwright, user_data_dir, headless=False)
+    return await launch_persistent_context(
+        playwright, user_data_dir, headless=False, site=site
+    )
 
 
 async def launch_context_for_request(
@@ -313,8 +453,7 @@ async def launch_context_with_routes(
     allow_all: when True, skip resource blocking (full page load).
     """
     opts = dict(context_opts)
-    session_by_origin: dict[str, list] = {}
-    headers: dict[str, str] = {}
+    auth_config_for_apply: dict | None = None
 
     if storage_state is not None:
         opts["storage_state"] = storage_state
@@ -323,19 +462,9 @@ async def launch_context_with_routes(
         config = _load_auth_config(path)
         if config:
             if path.name == "auth.json":
-                config = _normalize_auth_config(config)
-                # Full auth: apply storage_state, sessionStorage init script, headers
-                opts["storage_state"] = _storage_state_from_auth(config)
-                for origin in config.get("origins", []):
-                    if origin.get("sessionStorage"):
-                        session_by_origin[origin["origin"]] = _filter_storage_items(
-                            origin["sessionStorage"], LOCALSTORAGE_MAX_VALUE_LEN
-                        )
-                # Don't apply Authorization header - cookies are sent automatically and
-                # many APIs use cookie auth; adding Bearer can cause "invalid_api_key_format"
-                headers = {k: v for k, v in config.get("headers", {}).items() if k.lower() != "authorization"}
+                auth_config_for_apply = _normalize_auth_config(config)
+                opts["storage_state"] = _storage_state_from_auth(auth_config_for_apply)
             else:
-                # Legacy storage_state.json
                 opts["storage_state"] = str(path)
 
     context = await browser.new_context(**opts)
@@ -347,23 +476,11 @@ async def launch_context_with_routes(
 
         await context.route("**/*", route_handler)
 
-    # Inject sessionStorage via init script (auth.json only)
-    if session_by_origin:
-        import json as _json
-
-        script = f"""
-            (function() {{
-                const data = {_json.dumps(session_by_origin)};
-                const origin = location.origin;
-                if (data[origin]) {{
-                    data[origin].forEach(item => sessionStorage.setItem(item.name, item.value));
-                }}
-            }})();
-        """
-        await context.add_init_script(script)
-
-    # Set extra HTTP headers (auth.json only)
-    if headers:
-        await context.set_extra_http_headers(headers)
+    if auth_config_for_apply:
+        await apply_auth_config_to_context(
+            context,
+            auth_config_for_apply,
+            include_cookies=False,
+        )
 
     return context

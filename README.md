@@ -1,4 +1,4 @@
-# AIRTA Black Box — AI Security Red Team
+# AIRTA Red Team
 
 Black-box security testing for **LLMs and LLM-driven applications**, built for **red teams** and **whitehats** (authorized assessments only).
 

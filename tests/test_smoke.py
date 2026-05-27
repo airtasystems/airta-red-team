@@ -91,6 +91,68 @@ def test_convert_log_single(tmp_path: Path):
     assert data["results"][0]["ok"] is True
 
 
+def test_convert_log_multi_final_turn_only(tmp_path: Path):
+    from pipeline.convert_log import convert_run_log
+
+    suite = {
+        "playbook": "Test",
+        "playbook_id": "test",
+        "categories": [
+            {
+                "name": "Direct Prompt Testing",
+                "prompts": [
+                    {
+                        "id": "case-ms-1",
+                        "description": "3-turn sequence",
+                        "prompts": ["turn one", "turn two", "turn three attack"],
+                    },
+                ],
+            }
+        ],
+    }
+    run_log = {
+        "mode": "multi",
+        "batches": [
+            {
+                "batch_index": 0,
+                "turn_count": 3,
+                "turns": [
+                    {"turn": 0, "input": "turn one", "response": "ok 1"},
+                    {"turn": 1, "input": "turn two", "response": "ok 2"},
+                    {"turn": 2, "input": "turn three attack", "response": "refused"},
+                ],
+            }
+        ],
+    }
+    suite_path = tmp_path / "suite.json"
+    run_path = tmp_path / "run_log.json"
+    suite_path.write_text(json.dumps(suite), encoding="utf-8")
+    run_path.write_text(json.dumps(run_log), encoding="utf-8")
+
+    out = convert_run_log(run_path, suite_path)
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert len(data["results"]) == 1
+    row = data["results"][0]
+    assert row["id"] == "case-ms-1"
+    assert row["prompt"] == "turn three attack"
+    assert row["response"] == "refused"
+    assert len(row["prior_turns"]) == 2
+    assert row["prior_turns"][0]["prompt"] == "turn one"
+
+
+def test_security_assess_multi_turn_filters_legacy(tmp_path: Path):
+    from pipeline.security_assess import _filter_assessment_entries
+
+    results = [
+        {"id": "case-a-t1", "prompt": "p1", "response": "r1"},
+        {"id": "case-a-t2", "prompt": "p2", "response": "r2"},
+        {"id": "case-a-t3", "prompt": "p3", "response": "r3"},
+        {"id": "single-case", "prompt": "p", "response": "r"},
+    ]
+    filtered = _filter_assessment_entries(results)
+    assert [r["id"] for r in filtered] == ["case-a", "single-case"]
+
+
 def test_infer_playbook_id_from_title():
     from pipeline.convert_log import _infer_playbook_id
 
@@ -466,6 +528,29 @@ def test_export_rate_limit_detection():
     assert _is_rate_limited_error(RuntimeError("HTTP 429: Too Many Requests"))
     assert _is_rate_limited_error(RuntimeError("Cloudflare rate limit exceeded"))
     assert not _is_rate_limited_error(RuntimeError("HTTP 400: bad request"))
+
+
+def test_page_blockers_rate_limit_settings_defaults():
+    bb_dir = ROOT / "browser-bot"
+    if str(bb_dir) not in sys.path:
+        sys.path.insert(0, str(bb_dir))
+    from browser_bot.page_blockers import get_rate_limit_settings
+
+    cfg = get_rate_limit_settings("localhost:3000", "chat")
+    assert cfg["backoff_sec"] >= 1.0
+    assert cfg["max_auto_retries"] >= 0
+
+
+def test_launcher_auth_config_helpers():
+    bb_dir = ROOT / "browser-bot"
+    if str(bb_dir) not in sys.path:
+        sys.path.insert(0, str(bb_dir))
+    from browser_bot.browser.launcher import _auth_config_has_session_data, load_auth_config_for_site
+
+    assert not _auth_config_has_session_data({"auth_mode": "none", "cookies": [], "origins": []})
+    assert _auth_config_has_session_data({"cookies": [{"name": "s", "value": "v", "domain": ".x.com", "path": "/"}]})
+    cfg = load_auth_config_for_site("localhost:3000")
+    assert cfg is None or isinstance(cfg, dict)
 
 
 def test_playbook_template_loads_and_validates():

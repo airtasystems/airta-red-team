@@ -73,12 +73,21 @@ def _build_multi_index(suite: dict) -> list[dict]:
     for m in _suite_categories(suite):
         cat_name = _category_name(m)
         for p in m.get("prompts") or []:
-            out.append({
+            row = {
                 "id": p.get("id", ""),
                 "category": cat_name,
                 "description": p.get("description", ""),
                 "prompts": p.get("prompts", []),
-            })
+            }
+            if p.get("vector_type"):
+                row["vector_type"] = p["vector_type"]
+            if p.get("payload"):
+                row["payload"] = p["payload"]
+            if p.get("context_mode"):
+                row["context_mode"] = p["context_mode"]
+            if p.get("control_type"):
+                row["control_type"] = p["control_type"]
+            out.append(row)
     return out
 
 
@@ -221,6 +230,7 @@ def _convert_single(run_log: dict, suite: dict, suite_path: str) -> dict:
 
 
 def _convert_multi(run_log: dict, suite: dict, suite_path: str) -> dict:
+    """One attack_log row per multi-turn case — final turn only (for risk assessment)."""
     batches = run_log.get("batches") or []
     index = _build_multi_index(suite)
     meta = _suite_meta(suite)
@@ -228,6 +238,8 @@ def _convert_multi(run_log: dict, suite: dict, suite_path: str) -> dict:
 
     for batch_i, batch in enumerate(batches):
         turns = batch.get("turns") or []
+        if not turns:
+            continue
         matched: dict[str, Any] | None = None
         if batch_i < len(index):
             matched = index[batch_i]
@@ -238,22 +250,47 @@ def _convert_multi(run_log: dict, suite: dict, suite_path: str) -> dict:
                     matched = idx_entry
                     break
 
-        for turn_i, turn in enumerate(turns):
-            response = turn.get("response")
-            original_prompt = ""
+        prior_turns: list[dict] = []
+        for turn_i, turn in enumerate(turns[:-1]):
             if matched and turn_i < len(matched.get("prompts", [])):
                 original_prompt = matched["prompts"][turn_i]
             else:
                 original_prompt = turn.get("input", "")
-
-            results.append({
-                "id": f"{matched['id']}-t{turn_i + 1}" if matched else f"batch-{batch_i + 1}-t{turn_i + 1}",
-                "category": matched["category"] if matched else "",
-                "description": matched["description"] if matched else "",
+            prior_turns.append({
+                "turn": turn_i,
                 "prompt": original_prompt,
-                "response": response or "",
-                "ok": bool(response and str(response).strip()),
+                "response": turn.get("response") or "",
             })
+
+        final_turn = turns[-1]
+        final_i = len(turns) - 1
+        if matched and final_i < len(matched.get("prompts", [])):
+            final_prompt = matched["prompts"][final_i]
+        else:
+            final_prompt = final_turn.get("input", "")
+
+        response_text = final_turn.get("response") or ""
+        row = {
+            "id": matched["id"] if matched else f"batch-{batch_i + 1}",
+            "category": matched["category"] if matched else "",
+            "description": matched["description"] if matched else "",
+            "prompt": final_prompt,
+            "response": response_text,
+            "ok": bool(response_text and str(response_text).strip()),
+            "prior_turns": prior_turns,
+        }
+        if matched:
+            vector_type = matched.get("vector_type") or "text_direct"
+            row["vector_type"] = vector_type
+            if matched.get("control_type"):
+                row["control_type"] = matched["control_type"]
+            if matched.get("payload"):
+                from pipeline.artifact_preview import preview_from_suite_prompt
+
+                preview = preview_from_suite_prompt(matched)
+                if preview:
+                    row["extracted_text_preview"] = preview
+        results.append(row)
 
     return {**meta, "source_file": suite_path, "results": results}
 

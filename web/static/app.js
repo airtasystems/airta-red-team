@@ -1266,6 +1266,67 @@ createApp({
     const activeJobs = reactive({});
     const sseConnections = {};
     const runProgress = ref(null);
+    const runPreviews = ref([]);
+    const showRunPreviewModal = ref(false);
+    const runPreviewModalUrl = ref('');
+    const runPreviewModalLabel = ref('');
+    const showRunLoginModal = ref(false);
+    const showRunRateLimitModal = ref(false);
+    const runRateLimitBackoffSec = ref(60);
+    const rateLimitCountdown = ref(0);
+    const rateLimitWaiting = ref(false);
+    const pendingRunAfterRateLimit = ref(false);
+    let rateLimitTimer = null;
+    const runLoginUrl = ref('');
+    const runBlockedInfo = ref(null);
+    const pendingRunAfterLogin = ref(false);
+    const authSaving = ref(false);
+    const authSaveError = ref('');
+
+    function previewUrlFor(jobId, slot) {
+      return `${API}/api/jobs/${jobId}/preview/${slot}?t=${Date.now()}`;
+    }
+
+    function updateRunPreview(jobId, slot = 0) {
+      if (!jobId) {
+        runPreviews.value = [];
+        return;
+      }
+      const s = Number(slot) || 0;
+      const url = previewUrlFor(jobId, s);
+      const label = `Browser ${s + 1}`;
+      const idx = runPreviews.value.findIndex(p => p.slot === s);
+      if (idx >= 0) {
+        const next = runPreviews.value.slice();
+        next[idx] = { ...next[idx], url };
+        runPreviews.value = next;
+      } else {
+        runPreviews.value = [...runPreviews.value, { slot: s, url, label }].sort((a, b) => a.slot - b.slot);
+      }
+    }
+
+    function clearRunPreviews() {
+      runPreviews.value = [];
+    }
+
+    const hasRunPreviews = computed(() => runPreviews.value.length > 0);
+
+    const runPreviewLayoutClass = computed(() => {
+      if (runPreviews.value.length >= 3) return 'run-previews-row';
+      return 'run-previews-cols2';
+    });
+
+    function openRunPreviewModal(preview) {
+      runPreviewModalUrl.value = preview.url;
+      runPreviewModalLabel.value = preview.label;
+      showRunPreviewModal.value = true;
+    }
+
+    function closeRunPreviewModal() {
+      showRunPreviewModal.value = false;
+      runPreviewModalUrl.value = '';
+      runPreviewModalLabel.value = '';
+    }
 
     function formatRunEta(sec) {
       if (sec == null || sec === '' || Number.isNaN(Number(sec))) return '—';
@@ -1297,6 +1358,7 @@ createApp({
       }
       if (p.type === 'run_start') return 'Starting tests…';
       if (p.type === 'run_done') return 'Tests complete';
+      if (p.type === 'blocked') return p.message || 'Tests paused';
       return `${p.mode === 'multi' ? 'Multi-turn' : 'Single'} · ${p.current ?? 0} / ${p.total ?? 0} prompts`;
     });
 
@@ -1472,7 +1534,24 @@ createApp({
             const p = JSON.parse(line.slice('[airta_progress] '.length));
             const isRunJob = j.type === 'run_tests' && activeJobs.run_tests === j.id;
             const isRiskJob = j.type === 'security_assess' && activeJobs.security_assess === j.id;
-            if (isRunJob || isRiskJob) {
+            if (p.type === 'screenshot') {
+              if (isRunJob) updateRunPreview(jobId, p.slot ?? 0);
+            } else if (isRunJob || isRiskJob) {
+              if (p.type === 'blocked' && isRunJob) {
+                runBlockedInfo.value = p;
+                if (p.kind === 'login_required' || p.action === 'prompt_login' || p.action === 'start_login') {
+                  pendingRunAfterLogin.value = true;
+                  runLoginUrl.value = p.login_url || loginUrl.value || '';
+                  tab.value = 'run';
+                  showRunLoginModal.value = true;
+                } else if (p.kind === 'rate_limited' || p.action === 'prompt_rate_limit') {
+                  pendingRunAfterRateLimit.value = true;
+                  runRateLimitBackoffSec.value = Math.max(1, Math.round(Number(p.backoff_sec) || 60));
+                  tab.value = 'run';
+                  showRunRateLimitModal.value = true;
+                }
+                runProgress.value = { ...p, pct: runProgress.value?.pct ?? 0, phase: 'blocked' };
+              } else {
               let pct = 0;
               let phase = p.phase || 'submit';
               if (p.type === 'suite') {
@@ -1515,6 +1594,7 @@ createApp({
                 phase = 'risk';
               }
               runProgress.value = { ...p, pct, phase };
+              }
             }
           } catch { /* ignore */ }
         }
@@ -1531,7 +1611,10 @@ createApp({
         if (j.type === 'run_tests') {
           loadLatestRunLog();
           setTimeout(() => {
-            if (activeJobs.run_tests === j.id) runProgress.value = null;
+            if (activeJobs.run_tests === j.id) {
+              runProgress.value = null;
+              clearRunPreviews();
+            }
           }, 5000);
         }
         if (j.type === 'security_assess') {
@@ -1682,9 +1765,105 @@ createApp({
       await checkSetupAndNavigate();
     }
 
-    async function startLogin() {
-      const j = await startJob('login', { url: loginUrl.value });
+    async function startLogin(url) {
+      const targetUrl = url || loginUrl.value;
+      const j = await startJob('login', { url: targetUrl });
       loginJobId.value = j.id;
+    }
+
+    async function prepareAuthForLoginCapture() {
+      if (authMode.value === 'none') {
+        await api(`/api/sites/${encodeURIComponent(site.value)}/auth`, { method: 'DELETE' });
+        authConfigured.value = false;
+        authMode.value = null;
+      }
+      authLoginChoice.value = true;
+    }
+
+    async function confirmRunLogin() {
+      authSaveError.value = '';
+      const url = runLoginUrl.value || loginUrl.value;
+      if (!url) return;
+      loginUrl.value = url;
+      await prepareAuthForLoginCapture();
+      await startLogin(url);
+    }
+
+    async function saveAuth() {
+      if (!loginJobId.value || authSaving.value) return;
+      authSaving.value = true;
+      authSaveError.value = '';
+      try {
+        await api(`/api/jobs/${loginJobId.value}/stdin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: '\n' })
+        });
+        await new Promise(r => setTimeout(r, 1200));
+        await loadAuthStatus();
+        if (authMode.value !== 'session') {
+          authSaveError.value = 'Auth was not saved. Finish sign-in in the browser, then try again.';
+          return;
+        }
+        if (pendingRunAfterLogin.value) {
+          showRunLoginModal.value = false;
+          runBlockedInfo.value = null;
+          pendingRunAfterLogin.value = false;
+          await startRunTests();
+        }
+      } catch (e) {
+        authSaveError.value = e.message || 'Could not save auth.';
+      } finally {
+        authSaving.value = false;
+      }
+    }
+
+    function dismissRunLoginModal() {
+      showRunLoginModal.value = false;
+    }
+
+    function dismissRunRateLimitModal() {
+      if (rateLimitWaiting.value) return;
+      showRunRateLimitModal.value = false;
+    }
+
+    function _clearRateLimitTimer() {
+      if (rateLimitTimer) {
+        clearInterval(rateLimitTimer);
+        rateLimitTimer = null;
+      }
+    }
+
+    async function confirmRateLimitResume() {
+      if (rateLimitWaiting.value) return;
+      const total = Math.max(1, Math.round(Number(runRateLimitBackoffSec.value) || 60));
+      rateLimitWaiting.value = true;
+      rateLimitCountdown.value = total;
+      _clearRateLimitTimer();
+      rateLimitTimer = setInterval(() => {
+        rateLimitCountdown.value = Math.max(0, rateLimitCountdown.value - 1);
+        if (rateLimitCountdown.value <= 0) _clearRateLimitTimer();
+      }, 1000);
+      await new Promise(r => setTimeout(r, total * 1000));
+      _clearRateLimitTimer();
+      rateLimitWaiting.value = false;
+      showRunRateLimitModal.value = false;
+      runBlockedInfo.value = null;
+      const shouldResume = pendingRunAfterRateLimit.value;
+      pendingRunAfterRateLimit.value = false;
+      if (shouldResume) await startRunTests();
+    }
+
+    function onRunTroubleshoot() {
+      if (runBlockedInfo.value?.kind === 'login_required') {
+        showRunLoginModal.value = true;
+        return;
+      }
+      if (runBlockedInfo.value?.kind === 'rate_limited') {
+        showRunRateLimitModal.value = true;
+        return;
+      }
+      showRunTroubleshoot.value = true;
     }
 
     async function sendLoginEnter() {
@@ -1765,6 +1944,17 @@ createApp({
 
     async function startRunTests() {
       runProgress.value = null;
+      clearRunPreviews();
+      runBlockedInfo.value = null;
+      showRunLoginModal.value = false;
+      showRunRateLimitModal.value = false;
+      pendingRunAfterLogin.value = false;
+      pendingRunAfterRateLimit.value = false;
+      runLoginUrl.value = '';
+      authSaveError.value = '';
+      rateLimitWaiting.value = false;
+      rateLimitCountdown.value = 0;
+      _clearRateLimitTimer();
       if (run.strategy === '__all__') {
         await startJob('run_tests', { suite: '__all__', playbook: run.playbook, assess: run.assess });
       } else {
@@ -1914,6 +2104,12 @@ createApp({
     return {
       site, component, sites, components, tab, settingsTab, tabs, jobsOpen, jobs, activeJobs,
       showRunTroubleshoot,
+      showRunLoginModal, runLoginUrl, runBlockedInfo, pendingRunAfterLogin, authSaving, authSaveError,
+      showRunRateLimitModal, runRateLimitBackoffSec, rateLimitCountdown, rateLimitWaiting, pendingRunAfterRateLimit,
+      confirmRateLimitResume, dismissRunRateLimitModal,
+      runPreviews, hasRunPreviews, runPreviewLayoutClass, showRunPreviewModal, runPreviewModalUrl, runPreviewModalLabel,
+      openRunPreviewModal, closeRunPreviewModal,
+      confirmRunLogin, saveAuth, dismissRunLoginModal, onRunTroubleshoot,
       allStrategies, allPlaybooks, runStrategies, runPlaybooks, runAllPlaybooks, logs,
       gen, run, runArtifactStatus, runUploadWarning, risk, RISK_TIME_WINDOWS, riskWindowCounts, riskAssessEnabled, riskWindowValue, exportWindowCounts, exportEnabled, exp, cache,
       showPlaybookModal, pbForm, pbGenerating, pbError, pbMsg, pbIdTouched, pbSuggestId, openPlaybookModal, closePlaybookModal, submitPlaybookGenerate,

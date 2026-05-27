@@ -31,6 +31,16 @@ def log_airta_progress(payload: dict) -> None:
     print(f"[airta_progress] {json.dumps(payload, ensure_ascii=False)}", flush=True)
 
 
+TEST_PROMPT_DELIMITER = "\n[TEXT ONLY. NO HTML OR MARKUP. MAX 600 CHARS]"
+
+
+def append_test_prompt_delimiter(text: str) -> str:
+    """Append test delimiter if not already present."""
+    if TEST_PROMPT_DELIMITER in text:
+        return text
+    return text + TEST_PROMPT_DELIMITER
+
+
 class SubmissionProgressTracker:
     """Live ETA via throughput: elapsed/done * remaining."""
 

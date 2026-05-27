@@ -75,6 +75,11 @@ submission:
   # mode: single | multi     — single = one prompt per case (default)
   # batch_size: 3           — if >1 without mode, implies multi
 
+  # Optional rate-limit handling (Run Tests pauses with backoff prompt when detected):
+  # rate_limit:
+  #   backoff_sec: 60          — wait between auto-retries and user resume (defaults to EVASION_RETRY_WAIT_S)
+  #   max_auto_retries: 2      — reload attempts before pausing the run for user action
+
 
 # --- Settings overrides (optional) ---------------------------------------------
 # Same keys as Settings → Browser Config and Cache Control. Omit keys to inherit.

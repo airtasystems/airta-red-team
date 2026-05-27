@@ -162,6 +162,62 @@
     </div>
   </div>
 
+  <!-- Run preview zoom modal -->
+  <div v-if="showRunPreviewModal" class="modal-backdrop" @click.self="closeRunPreviewModal">
+    <div class="modal modal-preview">
+      <div class="modal-sub">{{ runPreviewModalLabel }}</div>
+      <div class="run-preview-modal-body">
+        <img class="run-preview-modal-img" :src="runPreviewModalUrl" :alt="runPreviewModalLabel">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" @click="closeRunPreviewModal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run rate-limit modal -->
+  <div v-if="showRunRateLimitModal" class="modal-backdrop" @click.self="dismissRunRateLimitModal">
+    <div class="modal modal-wide">
+      <div class="modal-sub">Rate limit detected</div>
+      <div class="modal-help">
+        <p>Tests paused — <strong>{{ site }}</strong> is showing a rate-limit or “too many requests” screen.</p>
+        <p>Automatic backoff did not clear the limit. Wait before resuming, or lower pool/cluster concurrency in Settings → Browser.</p>
+        <p v-if="rateLimitWaiting">
+          Waiting <strong>{{ rateLimitCountdown }}</strong>s before resuming tests…
+        </p>
+        <p v-else>
+          Recommended wait: <strong>{{ runRateLimitBackoffSec }}s</strong>
+        </p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" @click="dismissRunRateLimitModal" :disabled="rateLimitWaiting">Cancel</button>
+        <button type="button" class="btn btn-primary" @click="confirmRateLimitResume" :disabled="rateLimitWaiting">
+          {{ rateLimitWaiting ? ('Waiting… ' + rateLimitCountdown + 's') : ('Wait ' + runRateLimitBackoffSec + 's and resume') }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run login modal -->
+  <div v-if="showRunLoginModal" class="modal-backdrop" @click.self="dismissRunLoginModal">
+    <div class="modal modal-wide">
+      <div class="modal-sub">Sign-in required</div>
+      <div class="modal-help">
+        <p>Tests paused — <strong>{{ site }}</strong> is showing a login screen. Sign in to continue running tests against this target.</p>
+        <p v-if="!loginRunning">Click <strong>Log in</strong> to open a browser window, complete sign-in, then click <strong>Save auth</strong>.</p>
+        <p v-else>Complete sign-in in the browser window, then click <strong>Save auth</strong> to store your session and resume tests.</p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" @click="dismissRunLoginModal">Cancel</button>
+        <button type="button" class="btn btn-primary" v-if="!loginRunning" @click="confirmRunLogin">Log in</button>
+        <button type="button" class="btn btn-primary" v-else @click="saveAuth" :disabled="authSaving">
+          {{ authSaving ? 'Saving…' : 'Save auth' }}
+        </button>
+      </div>
+      <p v-if="authSaveError" class="modal-error">{{ authSaveError }}</p>
+    </div>
+  </div>
+
   <!-- Run troubleshooting modal -->
   <div v-if="showRunTroubleshoot" class="modal-backdrop" @click.self="showRunTroubleshoot = false">
     <div class="modal modal-wide">
@@ -315,7 +371,7 @@
                 </span>
               </div>
               <div class="setup-step-body">
-                <template v-if="authConfigured">
+                <template v-if="authConfigured && authLoginChoice !== true && !pendingRunAfterLogin">
                   <p v-if="authMode === 'none'">
                     This target is set up for <strong>public access</strong> - no login session is stored.
                     Browser tests will run without saved cookies.
@@ -326,7 +382,7 @@
                   <button type="button" class="btn btn-ghost btn-sm" @click="resetAuthSetup">Change access type</button>
                 </template>
 
-                <template v-else-if="authLoginChoice === null">
+                <template v-else-if="authLoginChoice === null && !pendingRunAfterLogin">
                   <p>Does this target require you to log in before you can use the LLM?</p>
                   <div class="auth-choice-btns">
                     <button type="button" class="btn btn-primary" @click="chooseAuthRequired">Yes - login required</button>
@@ -496,13 +552,30 @@
             <button class="btn btn-ghost" @click="startSampleRequest" :disabled="!site || !component || sampleRequestRunning">
               {{ sampleRequestRunning ? 'Sending Sample…' : 'Send Sample Request' }}
             </button>
-            <button class="btn btn-ghost" @click="showRunTroubleshoot = true">
-              Troubleshoot
-            </button>
+            <button
+              type="button"
+              :class="runBlockedInfo ? 'btn btn-troubleshoot-alert' : 'btn btn-ghost'"
+              @click="onRunTroubleshoot"
+            >Troubleshoot</button>
           </div>
+          <div v-if="loginRunning && pendingRunAfterLogin" class="run-auth-save-bar">
+            <div class="run-auth-save-text">
+              <strong>Sign-in in progress.</strong> Complete login in the browser window, then save your session.
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" @click="saveAuth" :disabled="authSaving">
+              {{ authSaving ? 'Saving…' : 'Save auth' }}
+            </button>
+            <p v-if="authSaveError" class="run-auth-save-error">{{ authSaveError }}</p>
+          </div>
+          <div
+            class="run-live-grid"
+            :class="{ 'has-preview': hasRunPreviews }"
+          >
+            <div class="run-live-main">
           <div
             v-if="runProgress && activeJobs.run_tests"
             class="run-progress-wrap"
+            :class="{ 'run-progress-blocked': runProgress.type === 'blocked' }"
           >
             <div class="run-progress-meta">
               <span>{{ runProgressBarLabel }}</span>
@@ -514,6 +587,25 @@
           </div>
           <div class="console" v-if="activeOutput('run_tests').length" ref="runConsole">
             <div v-for="(line, i) in activeOutput('run_tests')" :key="i" :class="lineClass(line)">{{ line }}</div>
+          </div>
+            </div>
+            <div v-if="hasRunPreviews" class="run-previews-panel">
+              <div class="run-previews-title">Live browser views</div>
+              <div class="run-previews-grid" :class="runPreviewLayoutClass">
+                <div
+                  v-for="preview in runPreviews"
+                  :key="preview.slot"
+                  class="run-preview-item"
+                  @click="openRunPreviewModal(preview)"
+                  title="Click to enlarge"
+                >
+                  <div class="run-preview-label">{{ preview.label }}</div>
+                  <div class="run-preview-frame">
+                    <img class="run-preview-img" :src="preview.url" :alt="preview.label">
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="console" v-if="activeOutput('sample_request').length">
             <div v-for="(line, i) in activeOutput('sample_request')" :key="i" :class="lineClass(line)">{{ line }}</div>

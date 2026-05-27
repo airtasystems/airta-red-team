@@ -344,6 +344,161 @@ select { cursor: pointer; }
   transition: width 0.35s ease;
 }
 
+.run-progress-wrap.run-progress-blocked .run-progress-fill {
+  background: var(--red);
+}
+
+.run-progress-wrap.run-progress-blocked .run-progress-meta {
+  color: var(--red);
+}
+
+.btn-troubleshoot-alert {
+  background: #d4af37;
+  color: #111;
+  border-color: #c4a030;
+}
+
+.btn-troubleshoot-alert:hover {
+  background: #e0bc45;
+  color: #111;
+}
+
+.run-auth-save-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: rgba(212, 175, 55, 0.12);
+  border: 1px solid #d4af37;
+  border-radius: var(--radius-sm);
+}
+
+.run-auth-save-text {
+  flex: 1;
+  min-width: 200px;
+  font-size: 13px;
+}
+
+.run-auth-save-error {
+  width: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--red);
+}
+
+.run-live-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.run-live-grid.has-preview {
+  grid-template-columns: 1fr 1fr;
+}
+
+.run-live-main {
+  min-width: 0;
+}
+
+.run-previews-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-previews-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.run-previews-grid {
+  gap: 8px;
+}
+
+.run-previews-grid.run-previews-cols2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.run-previews-grid.run-previews-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 8px;
+}
+
+.run-previews-grid.run-previews-row .run-preview-item {
+  flex: 1 1 0;
+  min-width: 100px;
+}
+
+.run-preview-item {
+  min-width: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: outline 0.15s ease;
+}
+
+.run-preview-item:hover {
+  outline: 1px solid var(--accent);
+}
+
+.run-preview-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.run-preview-frame {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+}
+
+.run-preview-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: top left;
+  background: #111;
+}
+
+.modal-preview {
+  width: min(92vw, 960px);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-preview-modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #111;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.run-preview-modal-img {
+  display: block;
+  max-width: 100%;
+  max-height: 75vh;
+  object-fit: contain;
+}
+
 /* Jobs drawer */
 .jobs-drawer {
   border-top: 1px solid var(--border);

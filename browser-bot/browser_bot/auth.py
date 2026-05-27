@@ -75,7 +75,7 @@ async def capture_login(login_url: str, *, force_persistent: bool = False) -> st
         if use_persistent:
             profile_path = get_login_profile_path(domain)
             profile_path.mkdir(parents=True, exist_ok=True)
-            browser, context = await launch_persistent_context_for_login(p, str(profile_path))
+            browser, context = await launch_persistent_context_for_login(p, str(profile_path), site=domain)
             page = await context.new_page()
             await page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
             print(f"\n  Log in at {login_url}")

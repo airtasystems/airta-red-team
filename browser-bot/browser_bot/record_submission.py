@@ -1080,7 +1080,7 @@ async def _headless_verify_input(
     if _should_use_login_profile(site):
         async with async_playwright() as p:
             browser, context = await launch_persistent_context(
-                p, str(profile_path), headless=True
+                p, str(profile_path), headless=True, site=site
             )
             page = await context.new_page()
             try:
@@ -1150,7 +1150,7 @@ async def _headless_capture_with_input_filled(
     if _should_use_login_profile(site):
         async with async_playwright() as p:
             browser, context = await launch_persistent_context(
-                p, str(profile_path), headless=True
+                p, str(profile_path), headless=True, site=site
             )
             page = await context.new_page()
             try:
@@ -1238,7 +1238,7 @@ async def _headless_verify_submit(
     if _should_use_login_profile(site):
         async with async_playwright() as p:
             browser, context = await launch_persistent_context(
-                p, str(profile_path), headless=True
+                p, str(profile_path), headless=True, site=site
             )
             page = await context.new_page()
             try:
@@ -1535,7 +1535,7 @@ def run_manual_training(site: str, component: str) -> bool:
 
             if has_profile:
                 browser, context = await launch_persistent_context(
-                    p, str(profile_path), headless=False
+                    p, str(profile_path), headless=False, site=site
                 )
                 page = await context.new_page()
                 try:
@@ -1635,7 +1635,7 @@ def run_training(site: str, component: str) -> bool:
 
             if has_profile:
                 browser, context = await launch_persistent_context(
-                    p, str(profile_path), headless=False
+                    p, str(profile_path), headless=False, site=site
                 )
                 page = await context.new_page()
                 try:

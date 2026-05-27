@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 from browser_bot.browser.human_behavior import human_mouse_wander
 from browser_bot.config import EVASION_REQUEST_DELAY_S, FETCH_METHOD, get_posts_strings, get_suite_test_cases
+from browser_bot.live_preview import live_preview_context
+from browser_bot.page_blockers import PageBlockedError, ensure_page_ready_for_submit
 from browser_bot.sites import get_storage_state_path, get_submission_config
 
 from browser_bot.submit.common import (
@@ -14,6 +16,7 @@ from browser_bot.submit.common import (
     SubmissionProgressTracker,
     _do_one_submit_step,
     _write_run_log,
+    append_test_prompt_delimiter,
     log_evasion,
     parallel_fetchers_for_ui,
     run_with_evasion_retry,
@@ -30,6 +33,9 @@ async def do_ui_submit_with_page(
     submit_selector: str,
     text: str,
     *,
+    site: str = "",
+    component: str = "",
+    blockers: list[dict] | None = None,
     response_selector: str = "",
     response_within_selector: str = "",
     response_text_within_selector: str = "",
@@ -40,30 +46,42 @@ async def do_ui_submit_with_page(
     suite_path=None,
 ) -> tuple[str, str | None]:
     """Run a single UI submission with the given page. Returns (text, response_text)."""
-    await asyncio.sleep(0.1 + time.perf_counter() % 0.15)
-    await page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
-    try:
-        await page.wait_for_load_state("load", timeout=10000)
-    except Exception:
-        pass
-    await asyncio.sleep(0.25)
-    if human_behavior:
-        await human_mouse_wander(page, count=1)
+    async with live_preview_context(page):
+        await asyncio.sleep(0.1 + time.perf_counter() % 0.15)
+        await page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
+        try:
+            await page.wait_for_load_state("load", timeout=10000)
+        except Exception:
+            pass
+        await asyncio.sleep(0.25)
+        if human_behavior:
+            await human_mouse_wander(page, count=1)
 
-    text_out, response_out, _ = await _do_one_submit_step(
-        page,
-        inputs,
-        submit_selector,
-        text,
-        response_selector=response_selector,
-        response_within_selector=response_within_selector,
-        response_text_within_selector=response_text_within_selector,
-        submit_via=submit_via,
-        response_wait_ms=response_wait_ms,
-        test_case=test_case,
-        suite_path=suite_path,
-    )
-    return (text_out, response_out)
+        await ensure_page_ready_for_submit(
+            page,
+            site=site,
+            component=component,
+            inputs=inputs,
+            submit_selector=submit_selector,
+            start_url=start_url,
+            blockers=blockers,
+        )
+
+        prompt_text = append_test_prompt_delimiter(text)
+        text_out, response_out, _ = await _do_one_submit_step(
+            page,
+            inputs,
+            submit_selector,
+            prompt_text,
+            response_selector=response_selector,
+            response_within_selector=response_within_selector,
+            response_text_within_selector=response_text_within_selector,
+            submit_via=submit_via,
+            response_wait_ms=response_wait_ms,
+            test_case=test_case,
+            suite_path=suite_path,
+        )
+        return (text_out, response_out)
 
 
 async def run_ui_submission_single(
@@ -84,7 +102,10 @@ async def run_ui_submission_single(
         return [], None
 
     test_cases = get_suite_test_cases(suite_path) if suite_path else []
-    posts = [tc["prompt"] for tc in test_cases] if test_cases else get_posts_strings(suite_path=suite_path)
+    if test_cases:
+        posts = [append_test_prompt_delimiter(tc["prompt"]) for tc in test_cases]
+    else:
+        posts = [append_test_prompt_delimiter(p) for p in get_posts_strings(suite_path=suite_path)]
     if not posts:
         return [], None
 
@@ -95,6 +116,7 @@ async def run_ui_submission_single(
     start_url = sub["start_url"]
     inputs: list[dict] = sub["inputs"]
     submit_selector = sub["submit_selector"]
+    blockers = sub.get("blockers") if isinstance(sub.get("blockers"), list) else None
     response_selector = sub.get("response_selector") or ""
     response_within_selector = sub.get("response_within_selector") or ""
     response_text_within_selector = sub.get("response_text_within_selector") or ""
@@ -123,6 +145,18 @@ async def run_ui_submission_single(
     if len(posts) > 1:
         parallel_fetchers = parallel_fetchers_for_ui(method, pool_fetcher, cluster_fetcher)
 
+    page_kwargs = dict(
+        site=site,
+        component=component,
+        blockers=blockers,
+        response_selector=response_selector,
+        response_within_selector=response_within_selector,
+        response_text_within_selector=response_text_within_selector,
+        submit_via=submit_via,
+        response_wait_ms=response_wait_ms,
+        suite_path=suite_path,
+    )
+
     if parallel_fetchers:
         async def _run_one_with_human(text: str, tc: dict | None = None):
             if human_fetcher is None:
@@ -135,20 +169,17 @@ async def run_ui_submission_single(
                     inputs,
                     submit_selector,
                     t,
-                    response_selector=response_selector,
-                    response_within_selector=response_within_selector,
-                    response_text_within_selector=response_text_within_selector,
-                    submit_via=submit_via,
-                    response_wait_ms=response_wait_ms,
                     human_behavior=True,
                     test_case=case,
-                    suite_path=suite_path,
+                    **page_kwargs,
                 )
 
             try:
                 return await run_with_evasion_retry(
                     lambda f=_cb: human_fetcher.with_page(f, storage_path=storage_str)
                 )
+            except PageBlockedError:
+                raise
             except NonSuccessResponseError:
                 return None
 
@@ -160,19 +191,16 @@ async def run_ui_submission_single(
                     inputs,
                     submit_selector,
                     t,
-                    response_selector=response_selector,
-                    response_within_selector=response_within_selector,
-                    response_text_within_selector=response_text_within_selector,
-                    submit_via=submit_via,
-                    response_wait_ms=response_wait_ms,
                     human_behavior=False,
                     test_case=case,
-                    suite_path=suite_path,
+                    **page_kwargs,
                 )
             try:
                 return await run_with_evasion_retry(
                     lambda f=_cb, fet=fetcher: fet.with_page(f, storage_path=storage_str)
                 )
+            except PageBlockedError:
+                raise
             finally:
                 if record_progress:
                     tracker.record_completed(1)
@@ -190,6 +218,8 @@ async def run_ui_submission_single(
             for fetcher in parallel_fetchers[1:]:
                 try:
                     retry_result = await _run_one(text, fetcher, tc=tc)
+                except PageBlockedError:
+                    raise
                 except Exception:
                     retry_result = None
                 if retry_result and retry_result[1]:
@@ -197,6 +227,8 @@ async def run_ui_submission_single(
             return await _run_one_with_human(text, tc)
 
         for text, tc, r in zip(posts, case_list, parallel_results):
+            if isinstance(r, PageBlockedError):
+                raise r
             if isinstance(r, Exception):
                 fallback = await _retry_fast_then_human(text, tc)
                 results.append(fallback if fallback and fallback[1] else (text, None))
@@ -228,20 +260,17 @@ async def run_ui_submission_single(
                         inputs,
                         submit_selector,
                         t,
-                        response_selector=response_selector,
-                        response_within_selector=response_within_selector,
-                        response_text_within_selector=response_text_within_selector,
-                        submit_via=submit_via,
-                        response_wait_ms=response_wait_ms,
                         human_behavior=hb,
                         test_case=case,
-                        suite_path=suite_path,
+                        **page_kwargs,
                     )
 
                 try:
                     result = await run_with_evasion_retry(
                         lambda f=_cb, fet=fetcher: fet.with_page(f, storage_path=storage_str)
                     )
+                except PageBlockedError:
+                    raise
                 except NonSuccessResponseError:
                     result = None
                 if result is not None and result[1]:
