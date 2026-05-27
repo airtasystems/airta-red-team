@@ -1,5 +1,7 @@
 # AIRTA Red Team
 
+![AIRTA Red Team dashboard](web/IMG/airta-red-team-dashboard.png)
+
 LLM Red Team security testing for **LLMs and LLM-driven applications**, built for **red teams** and **whitehats** (authorized assessments only).
 
 Generate adversarial suites from security playbooks (OWASP LLM, OWASP Agent, MITRE ATLAS, jailbreak, multimodal/file-upload), execute them against live targets via **browser UI or HTTP API**, and assess whether each attack was **exploited or mitigated** with playbook-specific experts and a judge model.
