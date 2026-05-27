@@ -1,1 +1,0 @@
-active_config: { preamble_text: <full_text>, operational_constraints: <list_of_rules> }
