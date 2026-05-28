@@ -684,7 +684,7 @@
             <button class="btn btn-ghost btn-sm hint-dismiss" @click="dismissHint('run')">Got it</button>
           </div>
           <div class="form-row">
-            <label>Framework</label>
+            <label>Playbook</label>
             <select v-model="runFramework" @change="loadRunStrategiesForFramework">
               <option value="">Select...</option>
               <option v-for="f in runFrameworks" :key="f.slug" :value="f.slug">{{ f.label }}</option>
@@ -699,7 +699,7 @@
             </select>
           </div>
           <div v-if="runFramework && run.strategy && run.strategy !== '__all__' && !run.playbook" style="color:var(--text-dim);font-size:13px;margin-bottom:8px;">
-            No test file found for this framework under the selected strategy.
+            No test file found for this playbook under the selected strategy.
           </div>
           <div class="checkbox-row">
             <input type="checkbox" id="assess" v-model="run.assess">
@@ -863,7 +863,7 @@
           <!-- File picker -->
           <div class="tm-picker">
             <div class="form-row">
-              <label>Framework</label>
+              <label>Playbook</label>
               <select v-model="tmFramework" @change="tmLoadStrategiesForFramework">
                 <option value="">Select…</option>
                 <option v-for="f in tmFrameworks" :key="f.slug" :value="f.slug">{{ f.label }}</option>
@@ -880,7 +880,7 @@
 
           <!-- No file selected -->
           <div v-if="!tmFile && tmFramework && !tmStrategies.length" style="color:var(--text-dim);font-size:13px;margin-top:16px;">
-            No strategies found for this framework.
+            No strategies found for this playbook.
           </div>
 
           <!-- File editor -->
