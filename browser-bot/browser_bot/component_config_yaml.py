@@ -146,6 +146,23 @@ def _format_api_submission(submission: dict[str, Any]) -> list[str]:
             "  # api_model: gpt-4o-mini",
             "",
         ])
+    api_context_mode = (submission.get("api_context_mode") or "").strip().lower()
+    if api_context_mode:
+        lines.extend([
+            "  # Multi-turn context: growing messages array (prefix + prior user/assistant + current user).",
+            f"  api_context_mode: {_yaml_scalar(api_context_mode)}",
+            "",
+        ])
+    prefix = submission.get("api_messages_prefix")
+    if isinstance(prefix, list) and prefix:
+        lines.extend([
+            "  # Optional system/developer messages prepended to every request.",
+            "  api_messages_prefix:",
+        ])
+        prefix_yaml = yaml.dump(prefix, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        for line in prefix_yaml.splitlines():
+            lines.append(f"    {line}" if line.strip() else "")
+        lines.append("")
     lines.extend([
         "  # Dot path into JSON response for assistant text (e.g. response or choices.0.message.content).",
         f"  api_response_path: {_yaml_scalar(submission.get('api_response_path') or 'response')}",

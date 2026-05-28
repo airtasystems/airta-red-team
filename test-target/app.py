@@ -21,6 +21,7 @@ from llm import (
     gemini_configured,
     gemini_model,
     generate_reply,
+    generate_reply_from_messages,
     guess_mime_type,
 )
 
@@ -46,8 +47,14 @@ class StoredDocument:
 DOCUMENTS: dict[str, StoredDocument] = {}
 
 
+class ChatMessage(BaseModel):
+    role: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1)
+
+
 class ChatRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=8000)
+    prompt: str | None = Field(default=None, max_length=8000)
+    messages: list[ChatMessage] | None = None
     document_id: str | None = None
 
 
@@ -126,6 +133,7 @@ def health() -> JSONResponse:
                 "model": gemini_model(),
                 "multimodal": gemini_configured(),
             },
+            "messages_api": True,
             "documents_cached": len(DOCUMENTS),
         }
     )
@@ -153,13 +161,15 @@ async def chat_api(request: Request) -> ChatResponse:
     """
     Chat with optional multimodal attachment.
 
-    JSON body: ``{"prompt": "...", "document_id": "..."}``
+    JSON body: ``{"prompt": "..."}``, ``{"messages": [{"role":"user","content":"..."}]}``,
+    or ``{"prompt": "...", "document_id": "..."}``
     Multipart form: ``prompt``, optional ``file``, optional ``document_id``
     """
     content_type = (request.headers.get("content-type") or "").lower()
     attachment: MediaAttachment | None = None
     doc_id: str | None = None
     prompt = ""
+    messages: list[dict[str, str]] | None = None
 
     if "multipart/form-data" in content_type:
         form = await request.form()
@@ -180,7 +190,9 @@ async def chat_api(request: Request) -> ChatResponse:
             body = ChatRequest.model_validate(await request.json())
         except Exception as exc:
             raise HTTPException(status_code=400, detail="invalid JSON body") from exc
-        prompt = body.prompt.strip()
+        prompt = (body.prompt or "").strip()
+        if body.messages:
+            messages = [{"role": m.role, "content": m.content} for m in body.messages]
         doc_id = body.document_id
         if doc_id:
             stored = _get_document(doc_id)
@@ -190,11 +202,14 @@ async def chat_api(request: Request) -> ChatResponse:
                 data=stored.data,
             )
 
-    if not prompt and not attachment:
-        raise HTTPException(status_code=400, detail="prompt or file is required")
+    if not prompt and not messages and not attachment:
+        raise HTTPException(status_code=400, detail="prompt, messages, or file is required")
 
     try:
-        result = generate_reply(prompt or "Please analyze the attached file.", attachment)
+        if messages:
+            result = generate_reply_from_messages(messages, attachment)
+        else:
+            result = generate_reply(prompt or "Please analyze the attached file.", attachment)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

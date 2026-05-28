@@ -332,6 +332,12 @@ def _normalize_api_submission(sub: dict, config: dict) -> dict | None:
     api_model = (sub.get("api_model") or "").strip()
     if api_model:
         out["api_model"] = api_model
+    api_context_mode = (sub.get("api_context_mode") or "").strip().lower()
+    if api_context_mode:
+        out["api_context_mode"] = api_context_mode
+    prefix = sub.get("api_messages_prefix")
+    if isinstance(prefix, list) and prefix:
+        out["api_messages_prefix"] = prefix
     return out
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import mimetypes
 import uuid
@@ -37,6 +38,103 @@ def apply_prompt_template(
     if isinstance(obj, list):
         return [apply_prompt_template(v, prompt, extra=extras, model=model) for v in obj]
     return obj
+
+
+def _body_contains_messages_placeholder(obj: Any) -> bool:
+    """Return True if ``api_body`` contains a ``{{messages}}`` placeholder."""
+    if isinstance(obj, str):
+        return "{{messages}}" in obj
+    if isinstance(obj, dict):
+        return any(_body_contains_messages_placeholder(v) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_body_contains_messages_placeholder(v) for v in obj)
+    return False
+
+
+def uses_messages_context(sub: dict[str, Any]) -> bool:
+    """True when multi-turn API runs should send a growing ``messages`` array."""
+    if (sub.get("api_context_mode") or "").strip().lower() == "messages":
+        return True
+    body = sub.get("api_body") or sub.get("api_body_template")
+    return _body_contains_messages_placeholder(body)
+
+
+def _normalize_message(msg: Any) -> dict[str, str] | None:
+    if not isinstance(msg, dict):
+        return None
+    role = str(msg.get("role") or "").strip()
+    content = msg.get("content")
+    if content is None:
+        return None
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False)
+    content = content.strip()
+    if not role or not content:
+        return None
+    return {"role": role, "content": content}
+
+
+def build_conversation_messages(
+    sub: dict[str, Any],
+    conversation_history: list[tuple[str, str]] | None,
+    current_prompt: str,
+) -> list[dict[str, str]]:
+    """Build OpenAI-style messages: optional prefix, prior user/assistant turns, current user."""
+    messages: list[dict[str, str]] = []
+    prefix = sub.get("api_messages_prefix") or []
+    if isinstance(prefix, list):
+        for msg in prefix:
+            normalized = _normalize_message(msg)
+            if normalized:
+                messages.append(normalized)
+
+    for user_text, assistant_text in conversation_history or []:
+        user_text = (user_text or "").strip()
+        assistant_text = (assistant_text or "").strip()
+        if user_text:
+            messages.append({"role": "user", "content": user_text})
+        if assistant_text:
+            messages.append({"role": "assistant", "content": assistant_text})
+
+    current_prompt = (current_prompt or "").strip()
+    if current_prompt:
+        messages.append({"role": "user", "content": current_prompt})
+    return messages
+
+
+def _inject_messages_value(obj: Any, messages: list[dict[str, str]]) -> Any:
+    """Replace ``{{messages}}`` placeholders with the built messages list."""
+    if isinstance(obj, str):
+        if obj.strip() == "{{messages}}":
+            return copy.deepcopy(messages)
+        return obj.replace("{{messages}}", json.dumps(messages, ensure_ascii=False))
+    if isinstance(obj, dict):
+        return {k: _inject_messages_value(v, messages) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_inject_messages_value(v, messages) for v in obj]
+    return obj
+
+
+def build_api_request_body(
+    sub: dict[str, Any],
+    prompt: str,
+    *,
+    conversation_history: list[tuple[str, str]] | None = None,
+) -> Any:
+    """Build the JSON request body, optionally with multi-turn ``messages`` context."""
+    api_model = str(sub.get("api_model") or "").strip()
+    template = sub.get("api_body") or {"prompt": "{{prompt}}"}
+
+    if not uses_messages_context(sub):
+        return apply_prompt_template(template, prompt, model=api_model)
+
+    messages = build_conversation_messages(sub, conversation_history, prompt)
+    body = copy.deepcopy(template)
+    if _body_contains_messages_placeholder(template):
+        body = _inject_messages_value(body, messages)
+    elif isinstance(body, dict):
+        body["messages"] = copy.deepcopy(messages)
+    return apply_prompt_template(body, prompt, model=api_model)
 
 
 def extract_json_path(data: Any, path: str) -> Any:
@@ -262,6 +360,7 @@ def do_api_request(
     timeout: float = 120.0,
     test_case: dict | None = None,
     suite_path: Path | str | None = None,
+    conversation_history: list[tuple[str, str]] | None = None,
 ) -> tuple[int, str | None, str | None]:
     """Send one API submission. Returns ``(status_code, response_text, error)``."""
     transport = (sub.get("transport") or "api").lower()
@@ -287,10 +386,10 @@ def do_api_request(
     if preflight_err:
         return 0, None, preflight_err
 
-    body_obj = apply_prompt_template(
-        sub.get("api_body") or {"prompt": "{{prompt}}"},
+    body_obj = build_api_request_body(
+        sub,
         prompt,
-        model=api_model,
+        conversation_history=conversation_history,
     )
     data: bytes | None = None
     if method in {"POST", "PUT", "PATCH"}:

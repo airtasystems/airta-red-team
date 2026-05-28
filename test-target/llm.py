@@ -201,6 +201,41 @@ def generate_reply(prompt: str, attachment: MediaAttachment | None = None) -> Ch
     text = (prompt or "").strip()
     if not text and not attachment:
         raise ValueError("prompt or attachment is required")
+    return _generate_reply_impl(text, attachment=attachment)
+
+
+def generate_reply_from_messages(
+    messages: list[dict[str, str]],
+    attachment: MediaAttachment | None = None,
+) -> ChatResult:
+    if not messages:
+        raise ValueError("messages is required")
+    normalized: list[dict[str, str]] = []
+    for msg in messages:
+        role = str(msg.get("role") or "").strip()
+        content = str(msg.get("content") or "").strip()
+        if role and content:
+            normalized.append({"role": role, "content": content})
+    if not normalized:
+        raise ValueError("messages must include at least one role/content pair")
+
+    last_user = ""
+    for msg in reversed(normalized):
+        if msg["role"] == "user":
+            last_user = msg["content"]
+            break
+    text = last_user or normalized[-1]["content"]
+    return _generate_reply_impl(text, attachment=attachment, messages=normalized)
+
+
+def _generate_reply_impl(
+    text: str,
+    *,
+    attachment: MediaAttachment | None = None,
+    messages: list[dict[str, str]] | None = None,
+) -> ChatResult:
+    if not text and not attachment:
+        raise ValueError("prompt or attachment is required")
     if not text:
         text = "Please analyze the attached file."
 
@@ -209,18 +244,42 @@ def generate_reply(prompt: str, attachment: MediaAttachment | None = None) -> Ch
     if client:
         uploaded_for_cleanup = None
         try:
-            contents: list = [text]
+            from google.genai import types
+
+            system_instruction = SYSTEM_PROMPT
+            contents: list = []
+            if messages:
+                system_parts: list[str] = []
+                for msg in messages:
+                    role = msg["role"]
+                    content = msg["content"]
+                    if role == "system":
+                        system_parts.append(content)
+                    elif role == "user":
+                        contents.append(
+                            types.Content(role="user", parts=[types.Part.from_text(text=content)])
+                        )
+                    elif role == "assistant":
+                        contents.append(
+                            types.Content(role="model", parts=[types.Part.from_text(text=content)])
+                        )
+                if system_parts:
+                    system_instruction = "\n\n".join(system_parts)
+            else:
+                contents = [text]
+
             if attachment:
                 media_part, uploaded_for_cleanup = _gemini_media_part(client, attachment)
-                contents = [media_part, text]
-
-            from google.genai import types
+                if messages:
+                    contents.append(types.Content(role="user", parts=[media_part]))
+                else:
+                    contents = [media_part, text]
 
             response = _generate_with_retry(
                 client,
                 model=model,
                 contents=contents,
-                config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+                config=types.GenerateContentConfig(system_instruction=system_instruction),
             )
             out = _text_from_genai_response(response)
             return ChatResult(
@@ -244,6 +303,15 @@ def generate_reply(prompt: str, attachment: MediaAttachment | None = None) -> Ch
                     client.files.delete(name=uploaded_for_cleanup.name)
                 except Exception:
                     pass
+
+    if messages:
+        return ChatResult(
+            prompt=text,
+            response=mock_reply(text, attachment),
+            model="mock",
+            source="mock",
+            attachment=attachment,
+        )
 
     return ChatResult(
         prompt=text,

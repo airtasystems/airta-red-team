@@ -625,7 +625,7 @@
                     </div>
                     <div v-if="apiDiscover.transport === 'api_document'" class="form-row">
                       <label>Upload URL</label>
-                      <input v-model="apiDiscover.uploadUrl" placeholder="http://127.0.0.1:5000/api/documents/upload" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                      <input v-model="apiDiscover.uploadUrl" placeholder="http://127.0.0.1:3000/api/documents/upload" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
                     </div>
                   </details>
 
@@ -1304,7 +1304,7 @@
                 <template v-if="compCfg.submission.transport === 'api_document'">
                   <div class="form-row">
                     <label>Upload URL</label>
-                    <input v-model="compCfg.submission.upload_url" placeholder="http://localhost:5000/api/documents/upload" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                    <input v-model="compCfg.submission.upload_url" placeholder="http://localhost:3000/api/documents/upload" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
                   </div>
                   <div class="form-row">
                     <label>Upload file field</label>
@@ -1316,7 +1316,7 @@
                   </div>
                   <div class="form-row">
                     <label>Chat API URL</label>
-                    <input v-model="compCfg.submission.api_url" placeholder="http://localhost:5000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                    <input v-model="compCfg.submission.api_url" placeholder="http://localhost:3000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
                   </div>
                   <div class="form-row">
                     <label>Response path</label>
@@ -1331,7 +1331,7 @@
                 <template v-else-if="compCfg.submission.transport === 'api_multipart'">
                   <div class="form-row">
                     <label>API URL</label>
-                    <input v-model="compCfg.submission.api_url" placeholder="http://localhost:5000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
+                    <input v-model="compCfg.submission.api_url" placeholder="http://localhost:3000/api/chat" style="flex:1;max-width:none;font-family:var(--mono);font-size:12px;">
                   </div>
                   <div class="form-row">
                     <label>Prompt field</label>

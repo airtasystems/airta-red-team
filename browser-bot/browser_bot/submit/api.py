@@ -14,7 +14,7 @@ from browser_bot.config import (
 )
 from browser_bot.sites import get_submission_config
 
-from browser_bot.submit.api_helpers import do_api_request
+from browser_bot.submit.api_helpers import do_api_request, uses_messages_context
 from browser_bot.submit.common import (
     SubmissionProgressTracker,
     _write_run_log,
@@ -30,6 +30,7 @@ async def _api_request_one(
     site: str | None,
     test_case: dict | None = None,
     suite_path=None,
+    conversation_history: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str | None]:
     status, response_text, err = await asyncio.to_thread(
         do_api_request,
@@ -38,6 +39,7 @@ async def _api_request_one(
         site=site,
         test_case=test_case,
         suite_path=suite_path,
+        conversation_history=conversation_history,
     )
     if err and not response_text:
         print(f"  [api] prompt failed ({status}): {err}")
@@ -52,9 +54,22 @@ async def _api_request_batch(
     tracker: SubmissionProgressTracker,
 ) -> list[tuple[str, str | None]]:
     results: list[tuple[str, str | None]] = []
+    use_messages = uses_messages_context(sub)
+    conversation_history: list[tuple[str, str]] = []
+
     for text in batch:
-        pair = await _api_request_one(sub, text, site=site)
+        prior_turns = list(conversation_history) if use_messages else None
+        pair = await _api_request_one(
+            sub,
+            text,
+            site=site,
+            conversation_history=prior_turns,
+        )
         results.append(pair)
+        if use_messages:
+            prompt_text, response_text = pair
+            if response_text:
+                conversation_history.append((append_test_prompt_delimiter(text), response_text))
         tracker.record_completed(1)
     return results
 
