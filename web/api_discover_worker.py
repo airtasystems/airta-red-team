@@ -31,6 +31,7 @@ if __name__ == "__main__":
         api_headers=params.get("api_headers") or {},
         api_body=params.get("api_body"),
         api_response_path=params.get("api_response_path", "response"),
+        api_model=params.get("api_model", ""),
         probe_prompt=params.get("probe_prompt", "Hello from AIRTA"),
         transport=params.get("transport", "api"),
         upload_url=params.get("upload_url", ""),

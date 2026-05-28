@@ -8,12 +8,21 @@ import uuid
 from pathlib import Path
 from typing import Any
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
-def apply_prompt_template(obj: Any, prompt: str, *, extra: dict[str, str] | None = None) -> Any:
-    """Replace ``{{prompt}}`` and optional ``{{key}}`` placeholders in nested structures."""
-    extras = extra or {}
+def apply_prompt_template(
+    obj: Any,
+    prompt: str,
+    *,
+    extra: dict[str, str] | None = None,
+    model: str = "",
+) -> Any:
+    """Replace ``{{prompt}}``, ``{{model}}``, and optional ``{{key}}`` placeholders."""
+    extras = dict(extra or {})
+    if model and "model" not in extras:
+        extras["model"] = model
 
     def _sub(s: str) -> str:
         out = s.replace("{{prompt}}", prompt)
@@ -24,27 +33,94 @@ def apply_prompt_template(obj: Any, prompt: str, *, extra: dict[str, str] | None
     if isinstance(obj, str):
         return _sub(obj)
     if isinstance(obj, dict):
-        return {k: apply_prompt_template(v, prompt, extra=extras) for k, v in obj.items()}
+        return {k: apply_prompt_template(v, prompt, extra=extras, model=model) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [apply_prompt_template(v, prompt, extra=extras) for v in obj]
+        return [apply_prompt_template(v, prompt, extra=extras, model=model) for v in obj]
     return obj
 
 
 def extract_json_path(data: Any, path: str) -> Any:
-    """Extract a dotted path from parsed JSON (e.g. ``response`` or ``data.text``)."""
+    """Extract a dotted path from parsed JSON (supports array indices, e.g. ``choices.0.message.content``)."""
     path = (path or "").strip()
     if not path:
         return data
     cur = data
     for part in path.split("."):
-        if isinstance(cur, dict) and part in cur:
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return None
+        elif isinstance(cur, dict) and part in cur:
             cur = cur[part]
         else:
             return None
     return cur
 
 
-def auth_headers_for_site(site: str | None) -> dict[str, str]:
+def auth_query_params_for_site(site: str | None) -> dict[str, str]:
+    """Return saved auth query params for API requests."""
+    if not site:
+        return {}
+    from browser_bot.auth_state import load_auth_config
+
+    cfg = load_auth_config(site) or {}
+    return {str(k): str(v) for k, v in (cfg.get("query_params") or {}).items()}
+
+
+def _merge_url_query(url: str, extra: dict[str, str]) -> str:
+    if not extra:
+        return url
+    parsed = urllib.parse.urlparse(url)
+    qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    for key, value in extra.items():
+        if key not in qs:
+            qs[key] = [value]
+    new_query = urllib.parse.urlencode(
+        [(key, val) for key, vals in qs.items() for val in vals],
+        doseq=True,
+    )
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+
+def _normalize_provider_auth(
+    headers: dict[str, str],
+    url: str,
+    query_params: dict[str, str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Map common Gemini auth shapes to ``x-goog-api-key`` / ``?key=``."""
+    if "generativelanguage.googleapis.com" not in (url or ""):
+        return headers, query_params
+
+    out_headers = dict(headers)
+    out_query = dict(query_params)
+
+    key_value = ""
+    auth = out_headers.pop("Authorization", "") or out_headers.pop("authorization", "")
+    if auth.startswith("Bearer "):
+        key_value = auth[7:].strip()
+    elif auth.startswith("AIza"):
+        key_value = auth.strip()
+
+    for hname, hval in list(out_headers.items()):
+        if hname.lower() == "x-goog-api-key" and hval:
+            key_value = key_value or hval.strip()
+            break
+
+    if not key_value and out_query.get("key"):
+        key_value = out_query["key"]
+
+    if not key_value:
+        return out_headers, out_query
+
+    if "x-goog-api-key" not in {k.lower(): v for k, v in out_headers.items()}:
+        out_headers["x-goog-api-key"] = key_value
+    if "key" not in out_query:
+        out_query["key"] = key_value
+    return out_headers, out_query
+
+
+def auth_headers_for_site(site: str | None, *, url: str = "") -> dict[str, str]:
     """Merge saved auth headers and cookies for API requests."""
     if not site:
         return {}
@@ -52,6 +128,12 @@ def auth_headers_for_site(site: str | None) -> dict[str, str]:
 
     cfg = load_auth_config(site) or {}
     headers = {str(k): str(v) for k, v in (cfg.get("headers") or {}).items()}
+    query_params = {str(k): str(v) for k, v in (cfg.get("query_params") or {}).items()}
+
+    if cfg.get("auth_mode") == "api_key":
+        headers, _ = _normalize_provider_auth(headers, url, query_params)
+        return headers
+
     cookies = cfg.get("cookies") or []
     if cookies:
         parts = []
@@ -60,7 +142,38 @@ def auth_headers_for_site(site: str | None) -> dict[str, str]:
                 parts.append(f"{cookie['name']}={cookie.get('value', '')}")
         if parts:
             headers.setdefault("Cookie", "; ".join(parts))
+    headers, _ = _normalize_provider_auth(headers, url, query_params)
     return headers
+
+
+def resolve_api_url(sub: dict[str, Any], *, site: str | None) -> tuple[str | None, str | None]:
+    """Substitute ``{{model}}``, merge auth query params. Returns ``(url, error)``."""
+    api_url = str(sub.get("api_url") or "").strip()
+    if not api_url:
+        return None, "api_url not configured"
+    api_model = str(sub.get("api_model") or "").strip()
+    if "{{model}}" in api_url and not api_model:
+        return None, "api_model is required when api_url contains {{model}}"
+    resolved = apply_prompt_template(api_url, "", model=api_model)
+    if not isinstance(resolved, str):
+        resolved = str(resolved)
+    query_params = auth_query_params_for_site(site)
+    _, query_params = _normalize_provider_auth({}, resolved, query_params)
+    return _merge_url_query(resolved, query_params), None
+
+
+def _gemini_auth_preflight(url: str, headers: dict[str, str], query_params: dict[str, str]) -> str | None:
+    if "generativelanguage.googleapis.com" not in url:
+        return None
+    merged_query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    has_key_param = "key" in merged_query or "key" in query_params
+    has_key_header = any(k.lower() == "x-goog-api-key" for k in headers)
+    if not has_key_param and not has_key_header:
+        return (
+            "Gemini API requires auth: save an API key in Connect Target Step 1 "
+            "with header x-goog-api-key or query param key"
+        )
+    return None
 
 
 def _http_request(
@@ -119,7 +232,7 @@ def _upload_document(
         return None, "upload_url not configured"
     file_field = sub.get("upload_file_field", "file")
     headers = dict(sub.get("api_headers") or {})
-    headers.update(auth_headers_for_site(site))
+    headers.update(auth_headers_for_site(site, url=str(upload_url)))
     content = artifact_path.read_bytes()
     mime, _ = mimetypes.guess_type(artifact_path.name)
     mime = mime or "application/octet-stream"
@@ -161,12 +274,24 @@ def do_api_request(
             sub, prompt, site=site, timeout=timeout, test_case=test_case, suite_path=suite_path
         )
 
-    url = sub["api_url"]
+    url, url_err = resolve_api_url(sub, site=site)
+    if url_err or not url:
+        return 0, None, url_err or "api_url not configured"
+
+    api_model = str(sub.get("api_model") or "").strip()
     method = (sub.get("api_method") or "POST").upper()
     headers = {"Accept": "application/json", **dict(sub.get("api_headers") or {})}
-    headers.update(auth_headers_for_site(site))
+    headers.update(auth_headers_for_site(site, url=url))
 
-    body_obj = apply_prompt_template(sub.get("api_body") or {"prompt": "{{prompt}}"}, prompt)
+    preflight_err = _gemini_auth_preflight(url, headers, auth_query_params_for_site(site))
+    if preflight_err:
+        return 0, None, preflight_err
+
+    body_obj = apply_prompt_template(
+        sub.get("api_body") or {"prompt": "{{prompt}}"},
+        prompt,
+        model=api_model,
+    )
     data: bytes | None = None
     if method in {"POST", "PUT", "PATCH"}:
         if "Content-Type" not in headers and "content-type" not in headers:
@@ -207,14 +332,19 @@ def do_api_document_request(
     if err or not doc_id:
         return 0, None, err or "upload failed"
 
-    url = sub["api_url"]
+    url, url_err = resolve_api_url(sub, site=site)
+    if url_err or not url:
+        return 0, None, url_err or "api_url not configured"
+
+    api_model = str(sub.get("api_model") or "").strip()
     method = (sub.get("api_method") or "POST").upper()
     headers = {"Accept": "application/json", **dict(sub.get("api_headers") or {})}
-    headers.update(auth_headers_for_site(site))
+    headers.update(auth_headers_for_site(site, url=url))
     body_obj = apply_prompt_template(
         sub.get("api_body") or {"prompt": "{{prompt}}", "document_id": "{{document_id}}"},
         prompt,
         extra={"document_id": doc_id},
+        model=api_model,
     )
     data = json.dumps(body_obj).encode("utf-8")
     if "Content-Type" not in headers:
@@ -241,6 +371,7 @@ def do_api_multipart_request(
     url = sub.get("api_url") or sub.get("upload_url")
     if not url:
         return 0, None, "api_url not configured"
+    url = _merge_url_query(str(url), auth_query_params_for_site(site))
     prompt_field = sub.get("multipart_prompt_field", "prompt")
     file_field = sub.get("multipart_file_field", "file")
     fields = {prompt_field: prompt}
@@ -264,7 +395,7 @@ def do_api_multipart_request(
 
     body, ctype = _encode_multipart(fields, files)
     headers = dict(sub.get("api_headers") or {})
-    headers.update(auth_headers_for_site(site))
+    headers.update(auth_headers_for_site(site, url=url))
     headers["Content-Type"] = ctype
     status, raw = _http_request(url, method="POST", headers=headers, data=body, timeout=timeout)
     if status >= 400:

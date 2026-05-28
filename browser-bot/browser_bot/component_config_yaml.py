@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -28,12 +29,12 @@ SETTINGS_OVERRIDES_EXAMPLE = """
 #
 # settings:
 #   gemini_use_cache: false          # true | false
-#   FETCH_METHOD: human              # auto | pool | cluster | human
+#   FETCH_METHOD: pool               # auto | pool | cluster | human
 #   HEADLESS: true                   # true | false
 #   HUMAN_COUNTRY: UK                # US | UK | DE | FR | JP | CA | AU | NL | ES | IT
 #   CHROME_CHANNEL: chromium         # chromium | chrome | chrome-beta | msedge
 #   BLOCKED_TYPES: [image, font]     # image | font | media | stylesheet
-#   POOL_SIZE: 8
+#   POOL_SIZE: 6
 #   API_CONCURRENCY: 8
 #   EVASION_REQUEST_DELAY_S: 0.5
 """
@@ -122,8 +123,9 @@ def _format_api_submission(submission: dict[str, Any]) -> list[str]:
         ])
 
     api_body = submission.get("api_body") or submission.get("api_body_template") or {"prompt": "{{prompt}}"}
+    api_model = (submission.get("api_model") or "").strip()
     lines.extend([
-        "  # JSON request body. Use {{prompt}} where the test prompt should be inserted.",
+        "  # JSON request body. Use {{prompt}} and {{model}} where needed.",
         "  api_body:",
     ])
     body_yaml = yaml.dump(api_body, default_flow_style=False, sort_keys=False, allow_unicode=True)
@@ -131,7 +133,21 @@ def _format_api_submission(submission: dict[str, Any]) -> list[str]:
         lines.append(f"    {line}" if line.strip() else "")
     lines.extend([
         "",
-        "  # Dot path into JSON response for assistant text (e.g. response or data.message).",
+    ])
+    if api_model:
+        lines.extend([
+            "  # Model/deployment id substituted into api_url/body {{model}} placeholders.",
+            f"  api_model: {_yaml_scalar(api_model)}",
+            "",
+        ])
+    elif "{{model}}" in str(submission.get("api_url") or "") or "{{model}}" in json.dumps(api_body):
+        lines.extend([
+            "  # Model/deployment id substituted into api_url/body {{model}} placeholders.",
+            "  # api_model: gpt-4o-mini",
+            "",
+        ])
+    lines.extend([
+        "  # Dot path into JSON response for assistant text (e.g. response or choices.0.message.content).",
         f"  api_response_path: {_yaml_scalar(submission.get('api_response_path') or 'response')}",
     ])
     return lines

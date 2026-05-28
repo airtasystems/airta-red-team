@@ -7,6 +7,14 @@ from typing import Any
 
 from browser_bot.component_config_yaml import SETTINGS_OVERRIDES_EXAMPLE, _yaml_scalar
 
+DEFAULT_DISCOVERY_SETTINGS: dict[str, Any] = {
+    "FETCH_METHOD": "pool",
+    "HEADLESS": True,
+    "POOL_SIZE": 6,
+    "API_CONCURRENCY": 8,
+    "EVASION_REQUEST_DELAY_S": 0.5,
+}
+
 SITE_CONFIG_INTRO = """# =============================================================================
 # Site config — browser-bot/sites/<site>/config.yaml
 # =============================================================================
@@ -32,7 +40,10 @@ def default_site_config(domain: str, *, login_url: str | None = None) -> dict[st
             login_url = f"http://{domain}"
         else:
             login_url = f"https://{domain}"
-    return {"login_url": login_url}
+    return {
+        "login_url": login_url,
+        "settings": dict(DEFAULT_DISCOVERY_SETTINGS),
+    }
 
 
 def _format_settings(settings: dict[str, Any]) -> list[str]:

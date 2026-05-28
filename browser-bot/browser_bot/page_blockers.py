@@ -118,7 +118,7 @@ def _site_has_saved_session(site: str) -> bool:
     config = load_auth_config(site)
     if not config:
         return False
-    if config.get("auth_mode") == "none":
+    if config.get("auth_mode") in ("none", "api_key"):
         return False
     if config.get("cookies"):
         return True

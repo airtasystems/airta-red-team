@@ -636,7 +636,14 @@ async def _start_api_discover(job: Job):
         "api_headers": job.params.get("api_headers") or {},
         "api_body": job.params.get("api_body"),
         "api_response_path": job.params.get("api_response_path", "response"),
+        "api_model": job.params.get("api_model", ""),
         "probe_prompt": job.params.get("probe_prompt", "Hello from AIRTA"),
+        "transport": job.params.get("transport", "api"),
+        "upload_url": job.params.get("upload_url", ""),
+        "upload_file_field": job.params.get("upload_file_field", "file"),
+        "upload_response_path": job.params.get("upload_response_path", "document_id"),
+        "multipart_prompt_field": job.params.get("multipart_prompt_field", "prompt"),
+        "multipart_file_field": job.params.get("multipart_file_field", "file"),
     }
     import json as _json
 

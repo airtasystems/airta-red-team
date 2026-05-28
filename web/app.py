@@ -25,8 +25,11 @@ if str(_root) not in sys.path:
 
 from browser_bot.auth_state import (
     auth_config_exists,
+    auth_header_name_for_domain,
     auth_mode_for_domain,
+    auth_query_param_for_domain,
     is_auth_configured,
+    save_api_key_auth,
     save_public_auth,
 )
 from browser_bot.sites import ensure_site_dir, AUTH_FILE
@@ -119,14 +122,47 @@ async def api_delete_site(site: str):
     raise HTTPException(404, "Site not found")
 
 
+@app.get("/api/llm-api-presets")
+async def api_llm_api_presets():
+    from browser_bot.api_presets import get_llm_api_presets
+
+    return get_llm_api_presets()
+
+
 @app.get("/api/sites/{site}/auth-status")
 async def api_auth_status(site: str):
     if not auth_config_exists(site):
         return {"configured": False, "mode": None}
+    mode = auth_mode_for_domain(site)
     return {
         "configured": is_auth_configured(site),
-        "mode": auth_mode_for_domain(site),
+        "mode": mode,
+        "auth_header": auth_header_name_for_domain(site) if mode == "api_key" else "",
+        "auth_query_param": auth_query_param_for_domain(site) if mode == "api_key" else "",
     }
+
+
+class ApiKeyAuthBody(BaseModel):
+    api_key: str
+    header_name: str = "Authorization"
+    use_bearer: bool = True
+    query_param_name: str = ""
+
+
+@app.post("/api/sites/{site}/auth/api-key")
+async def api_save_api_key_auth(site: str, body: ApiKeyAuthBody):
+    """Save API key auth for HTTP API transport (no browser login session)."""
+    try:
+        path = save_api_key_auth(
+            site,
+            body.api_key,
+            header_name=body.header_name,
+            use_bearer=body.use_bearer,
+            query_param_name=body.query_param_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "mode": "api_key", "path": str(path)}
 
 
 @app.post("/api/sites/{site}/auth/public")
@@ -427,6 +463,20 @@ async def api_all_playbooks(site: str, component: str):
             for f in strat_dir.glob("*.json"):
                 stems.add(f.stem)
     return [{"slug": s, "label": _pretty(s)} for s in sorted(stems)]
+
+
+@app.get("/api/sites/{site}/{component}/playbooks/{playbook}/strategies")
+async def api_playbook_strategies(site: str, component: str, playbook: str):
+    """Return strategies that contain a test file for this playbook stem."""
+    tests = _bb_dir / "sites" / site / component / "tests"
+    if not tests.is_dir():
+        return []
+    stem = playbook[:-5] if playbook.endswith(".json") else playbook
+    return [
+        {"slug": strat_dir.name, "label": _pretty(strat_dir.name)}
+        for strat_dir in sorted(tests.iterdir())
+        if strat_dir.is_dir() and (strat_dir / f"{stem}.json").is_file()
+    ]
 
 
 @app.get("/api/sites/{site}/{component}/strategies/{strategy}/playbooks")

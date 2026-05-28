@@ -92,6 +92,7 @@ _MANUAL_DISCOVERY_SCRIPT = r"""
     title: "AIRTA Manual Discovery",
     message: "Follow the steps to configure this component.",
     action: "Continue",
+    secondaryAction: "",
     allowAction: false,
   };
 
@@ -329,7 +330,10 @@ _MANUAL_DISCOVERY_SCRIPT = r"""
     panel.innerHTML = `
       <div class="airta-title"></div>
       <div class="airta-message"></div>
-      <button type="button" class="airta-button"></button>
+      <div class="airta-actions">
+        <button type="button" class="airta-button airta-primary"></button>
+        <button type="button" class="airta-button airta-secondary"></button>
+      </div>
       <div class="airta-hint"></div>
     `;
     const style = document.createElement("style");
@@ -345,12 +349,19 @@ _MANUAL_DISCOVERY_SCRIPT = r"""
       }
       #__airta_manual_panel .airta-title { font-weight: 600; margin-bottom: 6px; cursor: move; user-select: none; color: #dcddde; }
       #__airta_manual_panel .airta-message { color: #999999; margin-bottom: 10px; white-space: pre-wrap; }
+      #__airta_manual_panel .airta-actions { display: flex; flex-wrap: wrap; gap: 8px; }
       #__airta_manual_panel .airta-button {
         background: #7f6df2; color: #fff; border: 1px solid transparent; border-radius: 6px;
         padding: 8px 12px; font-weight: 600; cursor: pointer;
       }
       #__airta_manual_panel .airta-button:hover {
         background: #8870ff;
+      }
+      #__airta_manual_panel .airta-secondary {
+        background: transparent; color: #dcddde; border-color: #444444;
+      }
+      #__airta_manual_panel .airta-secondary:hover {
+        background: #333333;
       }
       #__airta_manual_panel .airta-hint { color: #727272; font-size: 11px; margin-top: 8px; }
       .__airta_manual_hover { outline: 2px solid #7f6df2 !important; outline-offset: 2px !important; }
@@ -379,10 +390,20 @@ _MANUAL_DISCOVERY_SCRIPT = r"""
     document.addEventListener("mouseup", () => {
       dragging = false;
     }, true);
-    panel.querySelector(".airta-button").addEventListener("click", (event) => {
+    panel.querySelector(".airta-primary").addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (window.airtaManualEvent) window.airtaManualEvent({ type: "continue" });
+      if (!window.airtaManualEvent) return;
+      if (state.mode === "confirm") {
+        window.airtaManualEvent({ type: "confirm" });
+      } else {
+        window.airtaManualEvent({ type: "continue" });
+      }
+    });
+    panel.querySelector(".airta-secondary").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (window.airtaManualEvent) window.airtaManualEvent({ type: "retry" });
     });
     return panel;
   }
@@ -391,9 +412,19 @@ _MANUAL_DISCOVERY_SCRIPT = r"""
     const panel = ensurePanel();
     panel.querySelector(".airta-title").textContent = state.title;
     panel.querySelector(".airta-message").textContent = state.message;
-    panel.querySelector(".airta-button").textContent = state.action;
+    panel.querySelector(".airta-primary").textContent = state.action;
+    const secondary = panel.querySelector(".airta-secondary");
+    if (state.secondaryAction) {
+      secondary.style.display = "";
+      secondary.textContent = state.secondaryAction;
+    } else {
+      secondary.style.display = "none";
+      secondary.textContent = "";
+    }
     panel.querySelector(".airta-hint").textContent = state.mode === "pick"
       ? "Click the highlighted target element on the page."
+      : state.mode === "confirm"
+      ? "Confirm saves this step to config.yaml. Try again lets you redo it."
       : "Keep this panel open while you navigate.";
   }
 
@@ -484,6 +515,7 @@ async def _manual_panel_event(
     *,
     mode: str,
     action: str = "Continue",
+    secondary_action: str = "",
     allow_action: bool = False,
 ) -> dict:
     queue = getattr(page, "_airta_manual_queue", None)
@@ -500,16 +532,50 @@ async def _manual_panel_event(
             pass
 
     await page.evaluate(
-        """({ message, mode, action, allowAction }) => {
-          window.__airtaManualSetStep({ message, mode, action, allowAction });
+        """({ message, mode, action, secondaryAction, allowAction }) => {
+          window.__airtaManualSetStep({ message, mode, action, secondaryAction, allowAction });
         }""",
-        {"message": message, "mode": mode, "action": action, "allowAction": allow_action},
+        {
+            "message": message,
+            "mode": mode,
+            "action": action,
+            "secondaryAction": secondary_action,
+            "allowAction": allow_action,
+        },
     )
     return await queue.get()
 
 
 async def _manual_continue(page, message: str, action: str = "Continue") -> None:
     await _manual_panel_event(page, message, mode="idle", action=action)
+
+
+async def _manual_confirm_step(page, title: str, summary: str) -> bool:
+    """Show captured step details. Returns True when user confirms, False to retry."""
+    event = await _manual_panel_event(
+        page,
+        f"{title}\n\n{summary}",
+        mode="confirm",
+        action="Confirm",
+        secondary_action="Try again",
+    )
+    return event.get("type") == "confirm"
+
+
+async def _manual_confirm_and_save(
+    page,
+    site: str,
+    component: str,
+    submission: dict,
+    *,
+    title: str,
+    summary: str,
+) -> bool:
+    """Confirm step details, then write submission to config.yaml."""
+    if not await _manual_confirm_step(page, title, summary):
+        return False
+    _save_partial(site, component, submission)
+    return True
 
 
 async def _manual_pick_or_skip(page, message: str) -> dict | None:
@@ -1276,6 +1342,7 @@ def run_api_discovery(
     api_headers: dict | None = None,
     api_body: dict | None = None,
     api_response_path: str = "response",
+    api_model: str = "",
     probe_prompt: str = "Hello from AIRTA",
     transport: str = "api",
     upload_url: str = "",
@@ -1285,12 +1352,16 @@ def run_api_discovery(
     multipart_file_field: str = "file",
 ) -> bool:
     """Configure component for direct API submission by probing the endpoint."""
-    from browser_bot.submit.api_helpers import do_api_document_request, do_api_multipart_request, do_api_request
+    from browser_bot.submit.api_helpers import do_api_document_request, do_api_multipart_request, do_api_request, resolve_api_url
 
     api_url = (api_url or "").strip()
+    api_model = (api_model or "").strip()
     transport = (transport or "api").strip().lower()
     if transport == "api" and not api_url:
         print("  [!] api_url is required for API discovery")
+        return False
+    if transport == "api" and "{{model}}" in api_url and not api_model:
+        print("  [!] api_model is required when api_url contains {{model}}")
         return False
     if transport == "api_document" and (not upload_url or not api_url):
         print("  [!] upload_url and api_url are required for api_document discovery")
@@ -1379,8 +1450,16 @@ def run_api_discovery(
             "api_body": api_body,
             "api_response_path": api_response_path,
         }
-        print(f"  Probing {submission['api_method']} {api_url}")
+        if api_model:
+            submission["api_model"] = api_model
+        probe_url, probe_err = resolve_api_url(submission, site=site)
+        if probe_err or not probe_url:
+            print(f"  [!] {probe_err or 'Could not resolve api_url'}")
+            return False
+        print(f"  Probing {submission['api_method']} {probe_url}")
         status, response_text, err = do_api_request(submission, probe_prompt, site=site)
+        if status == 403 and "generativelanguage.googleapis.com" in api_url:
+            print("  [!] Gemini returned 403 — use x-goog-api-key header or ?key= query param in Connect Target Step 1")
 
     if err and not response_text:
         print(f"  [!] Probe failed ({status}): {err}")
@@ -1444,15 +1523,26 @@ def run_manual_training(site: str, component: str) -> bool:
                 await page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
 
                 print("  [1/7] Browser opened. Waiting for target page confirmation...")
-                await _manual_continue(
-                    page,
-                    "1. Navigate to the LLM/chat page you want AIRTA to test.\n\n"
-                    "When the prompt input is visible, click Continue.",
-                    action="Continue",
-                )
-                submission["start_url"] = page.url
-                _save_partial(site, component, submission)
-                print(f"    start_url: {page.url}")
+                while True:
+                    await _manual_continue(
+                        page,
+                        "1. Navigate to the LLM/chat page you want AIRTA to test.\n\n"
+                        "When the prompt input is visible, click Continue.",
+                        action="Continue",
+                    )
+                    page_url = page.url
+                    if await _manual_confirm_and_save(
+                        page,
+                        site,
+                        component,
+                        {**submission, "start_url": page_url},
+                        title="Step 1/7 — Confirm start URL",
+                        summary=f"Page URL:\n{page_url}",
+                    ):
+                        submission["start_url"] = page_url
+                        print(f"    start_url: {page_url}")
+                        break
+                    print("    retrying step 1...")
 
                 inputs: list[dict] = []
 
@@ -1469,68 +1559,153 @@ def run_manual_training(site: str, component: str) -> bool:
                         print(f"      - {row.get('selector')} ({vis}, {uniq})")
                 else:
                     print("    upload support: no")
-                    await _manual_continue(
-                        page,
-                        "2. No file upload control detected on this page.\n\n"
-                        "Click Continue to configure the text prompt input.",
-                        action="Continue",
-                    )
+                    while True:
+                        await _manual_continue(
+                            page,
+                            "2. No file upload control detected on this page.\n\n"
+                            "Navigate elsewhere if uploads appear on another screen,\n"
+                            "then click Continue — or confirm to skip file upload.",
+                            action="Continue",
+                        )
+                        upload_info = await _detect_upload_capabilities(page)
+                        supports_upload = bool(upload_info.get("supports_upload"))
+                        auto_file_selector = _pick_best_file_input(upload_info)
+                        if supports_upload:
+                            count = len(upload_info.get("file_inputs") or [])
+                            print(f"    upload support: yes ({count} file input(s) found after rescan)")
+                            break
+                        if await _manual_confirm_step(
+                            page,
+                            "Step 2/7 — Confirm no file upload",
+                            "No file upload control will be configured.\n"
+                            "AIRTA will configure the text prompt input next.",
+                        ):
+                            break
+                        print("    retrying step 2...")
 
-                file_cfg: dict | None = None
                 if supports_upload:
                     print("  [3/7] Configuring multimodal file upload...")
-                    file_cfg = await _configure_multimodal_upload(
-                        page,
-                        step_label="3",
-                        auto_selector=auto_file_selector,
-                    )
-                    if file_cfg:
-                        inputs.append(file_cfg)
-                        submission["inputs"] = inputs
-                        submission["response_wait_ms"] = max(
-                            int(submission.get("response_wait_ms") or 8000), 60000
+                    while True:
+                        file_cfg = await _configure_multimodal_upload(
+                            page,
+                            step_label="3",
+                            auto_selector=auto_file_selector,
                         )
-                        _save_partial(site, component, submission)
-                        print(f"    file input: {file_cfg['selector']} (path_from=payload)")
-                    else:
-                        print("    file input: (not configured)")
+                        if not file_cfg:
+                            if await _manual_confirm_step(
+                                page,
+                                "Step 3/7 — Confirm skip file upload",
+                                "No file upload selector will be saved.\n"
+                                "Continue with text prompt configuration only.",
+                            ):
+                                print("    file input: (not configured)")
+                                break
+                            print("    retrying step 3...")
+                            continue
+
+                        summary = (
+                            f"File input selector:\n{file_cfg['selector']}\n\n"
+                            "path_from: payload (multimodal tests)"
+                        )
+                        draft = {
+                            **submission,
+                            "inputs": inputs + [file_cfg],
+                            "response_wait_ms": max(int(submission.get("response_wait_ms") or 8000), 60000),
+                        }
+                        if await _manual_confirm_and_save(
+                            page,
+                            site,
+                            component,
+                            draft,
+                            title="Step 3/7 — Confirm file upload input",
+                            summary=summary,
+                        ):
+                            inputs.append(file_cfg)
+                            submission["inputs"] = inputs
+                            submission["response_wait_ms"] = draft["response_wait_ms"]
+                            print(f"    file input: {file_cfg['selector']} (path_from=payload)")
+                            break
+                        print("    retrying step 3...")
 
                 print("  [4/7] Waiting for prompt input selection...")
-                input_event = await _manual_pick_selector(
-                    page,
-                    "4. Write a short test prompt in the prompt/input field.\n\n"
-                    "Then click that same input field once so AIRTA can save its selector.",
-                )
-                input_selector = input_event["selector"]
-                input_config = {
-                    "selector": input_selector,
-                    "type": _manual_input_type(input_event),
-                }
-                inputs.append(input_config)
-                submission["inputs"] = inputs
-                _save_partial(site, component, submission)
-                print(f"    input: {input_selector} (type={input_config['type']})")
+                while True:
+                    input_event = await _manual_pick_selector(
+                        page,
+                        "4. Write a short test prompt in the prompt/input field.\n\n"
+                        "Then click that same input field once so AIRTA can save its selector.",
+                    )
+                    input_selector = input_event["selector"]
+                    input_config = {
+                        "selector": input_selector,
+                        "type": _manual_input_type(input_event),
+                    }
+                    summary = (
+                        f"Prompt input selector:\n{input_selector}\n\n"
+                        f"Input type: {input_config['type']}"
+                    )
+                    draft = {**submission, "inputs": inputs + [input_config]}
+                    if await _manual_confirm_and_save(
+                        page,
+                        site,
+                        component,
+                        draft,
+                        title="Step 4/7 — Confirm prompt input",
+                        summary=summary,
+                    ):
+                        inputs.append(input_config)
+                        submission["inputs"] = inputs
+                        print(f"    input: {input_selector} (type={input_config['type']})")
+                        break
+                    print("    retrying step 4...")
 
                 print("  [5/7] Waiting for submit button selection...")
-                submit_event = await _manual_pick_selector(
-                    page,
-                    "5. Click the real Send/Submit button.\n\n"
-                    "AIRTA will save the button selector and allow the click through, so the prompt is submitted.",
-                    allow_action=True,
-                )
-                submission["submit_selector"] = submit_event["selector"]
-                _save_partial(site, component, submission)
-                print(f"    submit_selector: {submit_event['selector']}")
+                while True:
+                    submit_event = await _manual_pick_selector(
+                        page,
+                        "5. Click the real Send/Submit button.\n\n"
+                        "AIRTA will save the button selector and allow the click through, "
+                        "so the prompt is submitted.",
+                        allow_action=True,
+                    )
+                    submit_selector = submit_event["selector"]
+                    summary = f"Submit button selector:\n{submit_selector}"
+                    draft = {**submission, "submit_selector": submit_selector}
+                    if await _manual_confirm_and_save(
+                        page,
+                        site,
+                        component,
+                        draft,
+                        title="Step 5/7 — Confirm submit button",
+                        summary=summary,
+                    ):
+                        submission["submit_selector"] = submit_selector
+                        print(f"    submit_selector: {submit_selector}")
+                        break
+                    print("    retrying step 5...")
 
                 print("  [6/7] Waiting for response text selection...")
-                response_event = await _manual_pick_selector(
-                    page,
-                    "6. Wait for the model response to appear.\n\n"
-                    "Then click directly on the response text/container so AIRTA can save its selector.",
-                )
-                submission["response_selector"] = response_event["selector"]
-                _save_partial(site, component, submission)
-                print(f"    response_selector: {response_event['selector']}")
+                while True:
+                    response_event = await _manual_pick_selector(
+                        page,
+                        "6. Wait for the model response to appear.\n\n"
+                        "Then click directly on the response text/container "
+                        "so AIRTA can save its selector.",
+                    )
+                    response_selector = response_event["selector"]
+                    summary = f"Response container selector:\n{response_selector}"
+                    draft = {**submission, "response_selector": response_selector}
+                    if await _manual_confirm_and_save(
+                        page,
+                        site,
+                        component,
+                        draft,
+                        title="Step 6/7 — Confirm response selector",
+                        summary=summary,
+                    ):
+                        submission["response_selector"] = response_selector
+                        print(f"    response_selector: {response_selector}")
+                        break
+                    print("    retrying step 6...")
                 return True
 
             if has_profile:

@@ -39,12 +39,17 @@ def auth_config_exists(domain: str) -> bool:
 
 
 def is_auth_configured(domain: str) -> bool:
-    """True when auth is ready for browser runs (session capture or explicit public/no-login)."""
+    """True when auth is ready (session capture, API key, or explicit public/no-login)."""
     config = load_auth_config(domain)
     if not config:
         return False
-    if config.get("auth_mode") == "none":
+    mode = config.get("auth_mode")
+    if mode == "none":
         return True
+    if mode == "api_key":
+        headers = config.get("headers") or {}
+        query_params = config.get("query_params") or {}
+        return bool(headers) or bool(query_params)
     if config.get("cookies"):
         return True
     return any(
@@ -54,18 +59,74 @@ def is_auth_configured(domain: str) -> bool:
 
 
 def auth_mode_for_domain(domain: str) -> str | None:
-    """Return ``none``, ``session``, or None when auth is not configured."""
+    """Return ``none``, ``api_key``, ``session``, or None when auth is not configured."""
     if not is_auth_configured(domain):
         return None
     config = load_auth_config(domain) or {}
-    if config.get("auth_mode") == "none":
-        return "none"
+    mode = config.get("auth_mode")
+    if mode in ("none", "api_key"):
+        return mode
     return "session"
 
 
 def save_public_auth(domain: str) -> Path:
     """Save a no-login auth stub for public targets."""
     return save_auth_config(domain, dict(PUBLIC_AUTH_TEMPLATE))
+
+
+def _api_key_header_value(header_name: str, key: str, use_bearer: bool | None = None) -> str:
+    header_name = (header_name or "Authorization").strip()
+    if use_bearer is None:
+        use_bearer = header_name.lower() == "authorization"
+    if use_bearer and header_name.lower() == "authorization":
+        if key.startswith("Bearer "):
+            return key
+        return f"Bearer {key}"
+    return key
+
+
+def save_api_key_auth(
+    domain: str,
+    api_key: str,
+    *,
+    header_name: str = "Authorization",
+    use_bearer: bool | None = None,
+    query_param_name: str = "",
+) -> Path:
+    """Save API key auth for HTTP API transport (no browser login session)."""
+    api_key = (api_key or "").strip()
+    if not api_key:
+        raise ValueError("API key is required")
+
+    config = dict(PUBLIC_AUTH_TEMPLATE)
+    config["auth_mode"] = "api_key"
+    headers: dict[str, str] = {}
+    query_params: dict[str, str] = {}
+
+    param_name = (query_param_name or "").strip()
+    if param_name:
+        query_params[param_name] = api_key
+    else:
+        hname = (header_name or "Authorization").strip()
+        headers[hname] = _api_key_header_value(hname, api_key, use_bearer=use_bearer)
+
+    config["headers"] = headers
+    config["query_params"] = query_params
+    return save_auth_config(domain, config)
+
+
+def auth_header_name_for_domain(domain: str) -> str:
+    """Return saved API key header name (no secret value)."""
+    config = load_auth_config(domain) or {}
+    headers = config.get("headers") or {}
+    return next(iter(headers.keys()), "")
+
+
+def auth_query_param_for_domain(domain: str) -> str:
+    """Return saved API key query param name (no secret value)."""
+    config = load_auth_config(domain) or {}
+    query_params = config.get("query_params") or {}
+    return next(iter(query_params.keys()), "")
 
 
 def load_auth_config(domain: str) -> dict[str, Any] | None:
@@ -86,6 +147,8 @@ def _normalize_auth_config(data: dict) -> dict:
             origin["sessionStorage"] = []
     if "headers" not in data:
         data["headers"] = {}
+    if "query_params" not in data:
+        data["query_params"] = {}
     return data
 
 

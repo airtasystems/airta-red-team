@@ -26,59 +26,33 @@ login_url: "http://localhost:3000"
 
 # Optional (usually site-level): refresh_url, refresh_mode (cookie | both), endpoint_url
 
-# --- UI submission (browser automation — Run Tests / Sample Request) ----------
+# --- API submission (direct HTTP — no browser selectors required) -------------
 submission:
   # Transport: ui (browser automation) | api (HTTP endpoint)
-  transport: ui
+  transport: api
 
-  # Page URL where the chat / prompt UI lives (loaded before each test).
-  start_url: "http://localhost:3000/playground"
+  # Full URL of the chat/completion endpoint.
+  api_url: "https://generativelanguage.googleapis.com/v1beta/models/{{model}}:generateContent"
 
-  # Fields to fill in order before submit. One object per input.
-  inputs:
-    - selector: "#test-upload"
-      # Input type — affects how Playwright fills the field:
-      #   text | textarea | contenteditable | password | email | search
-      #   select | combobox | checkbox | radio | file (use path_from: payload for multimodal uploads)
-      type: file
-      path_from: "payload"
-      # value: optional fixed string (usually leave unset; tests supply the prompt)
-    - selector: "#test-prompt"
-      # Input type — affects how Playwright fills the field:
-      #   text | textarea | contenteditable | password | email | search
-      #   select | combobox | checkbox | radio | file (use path_from: payload for multimodal uploads)
-      type: textarea
-      # value: optional fixed string (usually leave unset; tests supply the prompt)
+  # HTTP method. Options: POST | GET | PUT | PATCH
+  api_method: POST
 
-  # Element that sends the prompt (button, etc.).
-  submit_selector: "#test-submit"
+  # Optional request headers (merged with saved auth headers).
+  api_headers:
+    Content-Type: "application/json"
 
-  # Container(s) for assistant output — roots the response capture.
-  # Often a message list, bubble, or [data-testid="assistant-message"].
-  response_selector: "div[data-testid=\"assistant-message\"]"
+  # JSON request body. Use {{prompt}} and {{model}} where needed.
+  api_body:
+    contents:
+    - role: user
+      parts:
+      - text: '{{prompt}}'
 
-  # Optional: descendant under response_selector — last visible match wins.
-  # Use when the root holds multiple messages and you want the latest bubble.
-  # response_within_selector: div.message-body
+  # Model/deployment id substituted into api_url/body {{model}} placeholders.
+  api_model: "gemini-3.1-flash-lite"
 
-  # Optional: narrower node for inner_text only (e.g. "> p" inside the bubble).
-  # response_text_within_selector: "> p"
-
-  # How to submit after filling inputs.
-  # Options: click | enter
-  submit_via: click
-
-  # Max time to wait for a new response after submit, in milliseconds (min ~500).
-  response_wait_ms: 60000
-
-  # Optional multi-turn UI mode (for tree-of-thoughts / batched suites):
-  # mode: single | multi     — single = one prompt per case (default)
-  # batch_size: 3           — if >1 without mode, implies multi
-
-  # Optional rate-limit handling (Run Tests pauses with backoff prompt when detected):
-  # rate_limit:
-  #   backoff_sec: 60          — wait between auto-retries and user resume (defaults to EVASION_RETRY_WAIT_S)
-  #   max_auto_retries: 2      — reload attempts before pausing the run for user action
+  # Dot path into JSON response for assistant text (e.g. response or choices.0.message.content).
+  api_response_path: "candidates.0.content.parts.0.text"
 
 
 # --- Settings overrides (optional) ---------------------------------------------
@@ -87,11 +61,11 @@ submission:
 #
 # settings:
 #   gemini_use_cache: false          # true | false
-#   FETCH_METHOD: human              # auto | pool | cluster | human
+#   FETCH_METHOD: pool               # auto | pool | cluster | human
 #   HEADLESS: true                   # true | false
 #   HUMAN_COUNTRY: UK                # US | UK | DE | FR | JP | CA | AU | NL | ES | IT
 #   CHROME_CHANNEL: chromium         # chromium | chrome | chrome-beta | msedge
 #   BLOCKED_TYPES: [image, font]     # image | font | media | stylesheet
-#   POOL_SIZE: 8
+#   POOL_SIZE: 6
 #   API_CONCURRENCY: 8
 #   EVASION_REQUEST_DELAY_S: 0.5

@@ -117,6 +117,8 @@ def load_auth_config_for_site(site: str) -> dict | None:
     config = _load_normalized_auth_config(path)
     if not config:
         return None
+    if config.get("auth_mode") == "api_key":
+        return None
     if config.get("auth_mode") == "none" and not _auth_config_has_session_data(config):
         return None
     return config
